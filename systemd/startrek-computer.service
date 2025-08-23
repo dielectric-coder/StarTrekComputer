@@ -1,0 +1,53 @@
+[Unit]
+Description=Star Trek Enterprise Computer Voice Assistant
+Documentation=https://github.com/oakeley/StarTrekComputer
+After=network.target sound.target ollama.service pulseaudio.service
+Wants=network.target sound.target ollama.service
+Requires=ollama.service
+StartLimitInterval=60s
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=startrek
+Group=audio
+ExecStart=/opt/startrek/StarTrekComputer/voice-assistant/target/release/voice-assistant
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=10
+KillMode=mixed
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+# Environment variables
+Environment=RUST_LOG=info
+Environment=RUST_BACKTRACE=1
+Environment=OLLAMA_HOST=http://localhost:11434
+Environment=HOME=/var/lib/startrek-computer
+WorkingDirectory=/opt/startrek/StarTrekComputer
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=startrek-computer
+
+# Security settings
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/startrek-computer /tmp /var/tmp
+PrivateTmp=true
+PrivateDevices=false
+DeviceAllow=/dev/snd rw
+DeviceAllow=/dev/dri rw
+SupplementaryGroups=audio
+
+# Resource limits
+MemoryMax=2G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

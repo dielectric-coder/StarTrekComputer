@@ -1,0 +1,40 @@
+# Development Configuration
+# For testing and development purposes
+
+[audio]
+sample_rate = 16000
+channels = 1
+buffer_size = 1024            # Larger buffer for stability during development
+input_device = null
+output_device = null
+
+[stt]
+engine = "whisper"
+model_path = "/home/edward/startrek/whisper.cpp/models/ggml-base.en.bin"
+language = "en"
+
+[tts]
+engine = "piper"
+model_path = "/home/edward/startrek/piper/voices/en_US-lessac-medium.onnx"
+voice = "lessac"
+speed = 1.0                   # Normal speed for development
+
+[llm]
+base_url = "http://localhost:11434"
+model = "qwen3:4b"
+context_length = 2048         # Full context for development
+temperature = 0.3
+
+[search]
+enabled = true
+search_script = "/home/edward/startrek/search_tool.py"
+max_results = 3
+
+[wake_word]
+enabled = true
+wake_word = "computer"
+sensitivity = 0.4             # Lower sensitivity to avoid false positives during testing
+
+[general]
+log_level = "debug"           # Verbose logging for development
+data_dir = "/home/edward/startrek/.voice-assistant"

@@ -1,0 +1,56 @@
+# Star Trek Computer Configuration Template
+# Copy to ~/.startrek-computer/config.toml and customize
+
+[audio]
+# Audio processing settings
+sample_rate = 16000           # Sample rate in Hz (8000, 16000, 44100, 48000)
+channels = 1                  # Number of audio channels (1=mono, 2=stereo)
+buffer_size = 1024           # Audio buffer size in samples
+input_device = null          # null = system default, or "hw:1,0" for specific device
+output_device = null         # null = system default, or "hw:0,0" for specific device
+
+[stt]
+# Speech-to-Text settings
+engine = "whisper"                                                      # STT engine ("whisper", "vosk")
+model_path = "/opt/startrek/startrek/whisper.cpp/models/ggml-base.en.bin"  # Path to STT model
+language = "en"                                                        # Language code
+
+[tts]
+# Text-to-Speech settings  
+engine = "piper"                                                           # TTS engine ("piper")
+model_path = "/opt/startrek/startrek/piper/voices/en_US-lessac-medium.onnx"  # Path to TTS model
+voice = "lessac"                                                          # Voice name
+speed = 0.9                                                              # Speech speed (0.5-2.0)
+
+[llm]
+# Large Language Model settings
+base_url = "http://localhost:11434"    # Ollama server URL
+model = "qwen3:4b"                     # Model name
+context_length = 2048                  # Context window size
+temperature = 0.3                      # Response creativity (0.0-1.0, lower = more factual)
+
+[search]
+# Web search and fact-checking settings
+enabled = true                                            # Enable web search functionality
+search_script = "/opt/startrek/startrek/search_tool.py"  # Path to search script
+max_results = 3                                          # Maximum search results to process
+
+[wake_word]
+# Wake word detection settings
+enabled = true        # Enable wake word detection
+wake_word = "computer"   # Wake word phrase
+sensitivity = 0.5     # Detection sensitivity (0.1-1.0)
+
+[rag]
+# RAG (Retrieval-Augmented Generation) system settings
+enabled = true                      # Enable learning and memory features
+max_conversations = 1000           # Maximum conversations to remember
+max_knowledge_entries = 5000       # Maximum knowledge base entries
+cleanup_days = 30                  # Days of data to keep (auto-cleanup)
+similarity_threshold = 0.7         # Relevance threshold for retrieval (0.0-1.0)
+learning_rate = 0.1               # How quickly preferences adapt (0.0-1.0)
+
+[general]
+# General application settings
+log_level = "info"                              # Logging level (error, warn, info, debug, trace)
+data_dir = "/var/lib/startrek-computer"         # Data directory for logs and cache

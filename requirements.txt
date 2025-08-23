@@ -1,0 +1,17 @@
+# Python dependencies for Star Trek Computer
+# Install with: pip install -r requirements.txt
+
+# Web scraping and HTTP requests
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# URL handling and security
+urllib3>=1.26.0
+certifi>=2023.0.0
+
+# Optional: Enhanced HTML parsing
+html5lib>=1.1
+
+# Optional: Better performance for large responses
+cchardet>=2.1.7

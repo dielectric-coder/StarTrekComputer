@@ -1,0 +1,40 @@
+# High Performance Configuration  
+# For powerful systems with ample resources
+
+[audio]
+sample_rate = 44100           # Higher quality audio
+channels = 2                  # Stereo support
+buffer_size = 2048            # Larger buffer for quality
+input_device = null
+output_device = null
+
+[stt]
+engine = "whisper"
+model_path = "/opt/startrek/startrek/whisper.cpp/models/ggml-base.en.bin"
+language = "en"
+
+[tts]
+engine = "piper"
+model_path = "/opt/startrek/startrek/piper/voices/en_US-lessac-medium.onnx"
+voice = "lessac"
+speed = 0.95                  # Slightly faster for snappy responses
+
+[llm]
+base_url = "http://localhost:11434"
+model = "qwen3:4b"
+context_length = 4096         # Maximum context for better conversations
+temperature = 0.25            # Balanced for quality and consistency
+
+[search]
+enabled = true
+search_script = "/opt/startrek/startrek/search_tool.py"
+max_results = 5               # More comprehensive search results
+
+[wake_word]
+enabled = true
+wake_word = "computer"
+sensitivity = 0.5
+
+[general]
+log_level = "info"
+data_dir = "/var/lib/startrek-computer"

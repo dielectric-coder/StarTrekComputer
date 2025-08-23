@@ -1,0 +1,48 @@
+# Jetson Nano Optimized Configuration
+# Optimized for Jetson Nano 16GB with USB microphone
+
+[audio]
+sample_rate = 16000           # Optimal for Whisper and low latency
+channels = 1                  # Mono reduces processing load
+buffer_size = 512             # Smaller buffer for lower latency
+input_device = null           # Auto-detect USB microphone
+output_device = null          # Use default audio output
+
+[stt]
+engine = "whisper"
+model_path = "/opt/startrek/startrek/whisper.cpp/models/ggml-base.en.bin"
+language = "en"
+
+[tts]
+engine = "piper"
+model_path = "/opt/startrek/startrek/piper/voices/en_US-lessac-medium.onnx"
+voice = "lessac"
+speed = 0.85                  # Slightly slower for better clarity on small speakers
+
+[llm]
+base_url = "http://localhost:11434"
+model = "qwen3:4b"            # Good balance of capability and memory usage
+context_length = 1536         # Reduced for memory optimization
+temperature = 0.2             # Lower for more consistent Enterprise computer responses
+
+[search]
+enabled = true
+search_script = "/opt/startrek/startrek/search_tool.py"
+max_results = 2               # Reduced to minimize processing time
+
+[wake_word]
+enabled = true
+wake_word = "computer"
+sensitivity = 0.6             # Higher sensitivity for better detection
+
+[rag]
+enabled = true
+max_conversations = 500      # Reduced for memory optimization
+max_knowledge_entries = 2000 # Reduced for Jetson Nano
+cleanup_days = 14           # More frequent cleanup
+similarity_threshold = 0.8  # Higher threshold for better matches
+learning_rate = 0.15        # Faster adaptation
+
+[general]
+log_level = "info"
+data_dir = "/var/lib/startrek-computer"

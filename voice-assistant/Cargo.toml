@@ -1,0 +1,86 @@
+[package]
+name = "voice-assistant"
+version = "0.1.0"
+edition = "2021"
+authors = ["Edward J. Oakeley <edward@oakeley.com>"]
+description = "Star Trek Enterprise Computer Voice Assistant with RAG Learning System"
+repository = "https://github.com/oakeley/StarTrekComputer"
+homepage = "https://github.com/oakeley/StarTrekComputer"
+license = "MIT"
+keywords = ["voice-assistant", "star-trek", "llm", "rag", "jetson-nano"]
+categories = ["multimedia", "command-line-utilities"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# HTTP client for Ollama and web search
+reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# File I/O
+tempfile = "3.8"
+
+# String processing
+regex = "1.10"
+
+# Cross-platform paths
+dirs = "5.0"
+
+# Audio files
+hound = "3.5"
+
+# Configuration
+toml = "0.8"
+
+# Database for RAG system
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"] }
+
+# Vector embeddings and similarity
+candle-core = "0.3"
+candle-nn = "0.3"
+candle-transformers = "0.3"
+
+# UUID generation
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Serialization
+bincode = "1.3"
+
+# Text processing
+tokenizers = "0.15"
+
+[features]
+default = []
+whisper-native = []
+
+[[bin]]
+name = "voice-assistant"
+path = "src/main.rs"
+
+[[bin]]
+name = "rag-manager"
+path = "src/bin/rag_manager.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.release-pi]
+inherits = "release"
+opt-level = "s"  # Optimize for size on Pi
