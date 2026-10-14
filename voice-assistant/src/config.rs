@@ -68,6 +68,9 @@ pub struct LlmConfig {
     pub model: String,
     pub context_length: usize,
     pub temperature: f32,
+    /// Let reasoning models "think" before answering; much slower on CPU
+    #[serde(default)]
+    pub think: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +135,7 @@ impl Default for AssistantConfig {
                 model: "qwen3:4b".to_string(), // Updated to match the specification
                 context_length: 2048,
                 temperature: 0.3, // Lower for more factual responses
+                think: false,
             },
             search: SearchConfig {
                 enabled: true,

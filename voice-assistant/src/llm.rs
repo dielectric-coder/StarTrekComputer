@@ -12,6 +12,7 @@ struct OllamaRequest {
     prompt: String,
     stream: bool,
     keep_alive: &'static str,
+    think: bool,
     options: OllamaOptions,
 }
 
@@ -65,6 +66,7 @@ impl LLMClient {
             prompt: String::new(), // an empty prompt only loads the model
             stream: false,
             keep_alive: MODEL_KEEP_ALIVE,
+            think: config.llm.think,
             options: OllamaOptions {
                 temperature: config.llm.temperature,
                 num_ctx: config.llm.context_length,
@@ -131,6 +133,7 @@ impl LLMClient {
             prompt: full_prompt,
             stream: false,
             keep_alive: MODEL_KEEP_ALIVE,
+            think: self.config.llm.think,
             options: OllamaOptions {
                 temperature: 0.3, // Lower temperature for more consistent, factual responses
                 num_ctx: self.config.llm.context_length,

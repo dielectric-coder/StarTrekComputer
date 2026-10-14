@@ -231,6 +231,7 @@ For detailed troubleshooting, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 - [**DEPENDENCIES.md**](DEPENDENCIES.md) - Complete dependency documentation
 - [**TROUBLESHOOTING.md**](TROUBLESHOOTING.md) - Problem solving guide
 - [**RAG_SYSTEM.md**](RAG_SYSTEM.md) - Learning and memory system documentation
+- [**DESKTOP_SETUP.md**](docs/DESKTOP_SETUP.md) - Running on a Linux desktop with PipeWire and a systemd user service
 
 ## 🏗️ Development
 
