@@ -19,7 +19,6 @@ use llm::LLMClient;
 use search::{WebSearcher, SearchResults};
 use stt::SpeechToText;
 use tts::TextToSpeech;
-use vad::VoiceActivityDetector;
 use wake_word::WakeWordDetector;
 
 #[derive(Debug, Clone)]
@@ -48,7 +47,6 @@ pub struct VoiceAssistant {
     tts: Arc<TextToSpeech>,
     llm: Arc<LLMClient>,
     searcher: Arc<WebSearcher>,
-    vad: Arc<VoiceActivityDetector>,
     wake_word: Arc<Mutex<WakeWordDetector>>,
     command_tx: mpsc::UnboundedSender<AssistantCommand>,
     command_rx: Arc<Mutex<mpsc::UnboundedReceiver<AssistantCommand>>>,
@@ -67,7 +65,6 @@ impl VoiceAssistant {
         let tts = Arc::new(TextToSpeech::new(&config).await?);
         let llm = Arc::new(LLMClient::new(&config).await?);
         let searcher = Arc::new(WebSearcher::new(&config));
-        let vad = Arc::new(VoiceActivityDetector::new(&config)?);
         let wake_word = Arc::new(Mutex::new(WakeWordDetector::new(&config).await?));
 
         let (command_tx, command_rx) = mpsc::unbounded_channel();
@@ -80,7 +77,6 @@ impl VoiceAssistant {
             tts,
             llm,
             searcher,
-            vad,
             wake_word,
             command_tx,
             command_rx: Arc::new(Mutex::new(command_rx)),
@@ -113,8 +109,12 @@ impl VoiceAssistant {
         loop {
             tokio::select! {
                 Some(command) = command_rx.recv() => {
+                    let shutdown = matches!(command, AssistantCommand::Shutdown);
                     if let Err(e) = self.handle_command(command).await {
                         error!("Error handling command: {}", e);
+                    }
+                    if shutdown {
+                        break;
                     }
                 }
                 Some(event) = event_rx.recv() => {
@@ -136,7 +136,7 @@ impl VoiceAssistant {
                 *self.is_listening.lock().await = true;
                 
                 // Play acknowledgment sound
-                self.tts.speak("I'm listening").await?;
+                self.speak("I'm listening").await?;
             }
             
             AssistantCommand::StopListening => {
@@ -149,14 +149,21 @@ impl VoiceAssistant {
                     self.process_audio_data(audio_data).await?;
                 } else {
                     // Check for wake word
-                    if self.wake_word.lock().await.detect(&audio_data).await? {
-                        self.event_tx.send(AssistantEvent::WakeWordDetected)?;
+                    if let Some(transcription) = self.wake_word.lock().await.detect(&audio_data).await? {
+                        let rest = transcription.to_lowercase().replacen("computer", "", 1);
+                        if !rest.chars().any(|c| c.is_alphanumeric()) {
+                            self.event_tx.send(AssistantEvent::WakeWordDetected)?;
+                        } else {
+                            // "Computer, <command>" spoken in one go
+                            *self.is_listening.lock().await = true;
+                            self.event_tx.send(AssistantEvent::SpeechDetected(transcription))?;
+                        }
                     }
                 }
             }
             
             AssistantCommand::SpeakText(text) => {
-                self.tts.speak(&text).await?;
+                self.speak(&text).await?;
                 self.event_tx.send(AssistantEvent::AudioPlaybackComplete)?;
             }
             
@@ -209,12 +216,9 @@ impl VoiceAssistant {
     }
 
     async fn process_audio_data(&self, audio_data: Vec<f32>) -> Result<()> {
-        // Check for voice activity
-        if self.vad.detect_speech(&audio_data)? {
-            // Convert speech to text
-            if let Some(text) = self.stt.transcribe(&audio_data).await? {
-                self.event_tx.send(AssistantEvent::SpeechDetected(text))?;
-            }
+        // Audio arrives as complete utterances already gated by voice activity detection
+        if let Some(text) = self.stt.transcribe(&audio_data).await? {
+            self.event_tx.send(AssistantEvent::SpeechDetected(text))?;
         }
 
         Ok(())
@@ -227,10 +231,10 @@ impl VoiceAssistant {
 
         // Voice confirmation: echo back what was heard
         let confirmation = format!("You have requested: {}", cleaned_input);
-        self.tts.speak(&confirmation).await?;
+        self.speak(&confirmation).await?;
         
         // Processing notification
-        self.tts.speak("Processing...").await?;
+        self.speak("Processing...").await?;
 
         // Check if it's a search request
         if input_lower.contains("search") || input_lower.contains("look up") || 
@@ -292,6 +296,14 @@ impl VoiceAssistant {
         }
 
         Ok(())
+    }
+
+    /// Speak with the microphone muted so the assistant doesn't hear itself.
+    async fn speak(&self, text: &str) -> Result<()> {
+        self.audio_manager.pause_capture();
+        let result = self.tts.speak(text).await;
+        self.audio_manager.resume_capture();
+        result
     }
 
     fn extract_search_terms(&self, query: &str) -> String {

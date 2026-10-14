@@ -11,8 +11,12 @@ struct OllamaRequest {
     model: String,
     prompt: String,
     stream: bool,
+    keep_alive: &'static str,
     options: OllamaOptions,
 }
+
+/// Keep the model loaded between questions; a cold load can take 15+ seconds.
+const MODEL_KEEP_ALIVE: &str = "30m";
 
 #[derive(Debug, Serialize)]
 struct OllamaOptions {
@@ -37,17 +41,49 @@ impl LLMClient {
         info!("Initializing LLM client for model: {}", config.llm.model);
         
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(120))
             .build()?;
         
         // Initialize RAG database
         let rag_db = RAGDatabase::new(config).await?;
-            
+
+        Self::preload_model(&client, config);
+
         Ok(Self {
             config: config.clone(),
             client,
             rag_db,
         })
+    }
+
+    /// Load the model into Ollama in the background so the first question is answered quickly.
+    fn preload_model(client: &Client, config: &AssistantConfig) {
+        let client = client.clone();
+        let url = format!("{}/api/generate", config.llm.base_url);
+        let request = OllamaRequest {
+            model: config.llm.model.clone(),
+            prompt: String::new(), // an empty prompt only loads the model
+            stream: false,
+            keep_alive: MODEL_KEEP_ALIVE,
+            options: OllamaOptions {
+                temperature: config.llm.temperature,
+                num_ctx: config.llm.context_length,
+            },
+        };
+
+        tokio::spawn(async move {
+            match client.post(&url).json(&request).send().await {
+                Ok(response) if response.status().is_success() => {
+                    info!("LLM model {} loaded", request.model)
+                }
+                Ok(response) => error!(
+                    "Failed to preload LLM model {}: {} (is it pulled in Ollama?)",
+                    request.model,
+                    response.status()
+                ),
+                Err(e) => error!("Failed to preload LLM model {}: {}", request.model, e),
+            }
+        });
     }
 
     pub async fn generate_response(&self, prompt: &str, context: Option<&str>) -> Result<String> {
@@ -94,6 +130,7 @@ impl LLMClient {
             model: self.config.llm.model.clone(),
             prompt: full_prompt,
             stream: false,
+            keep_alive: MODEL_KEEP_ALIVE,
             options: OllamaOptions {
                 temperature: 0.3, // Lower temperature for more consistent, factual responses
                 num_ctx: self.config.llm.context_length,

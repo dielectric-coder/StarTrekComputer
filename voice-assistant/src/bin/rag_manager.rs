@@ -129,7 +129,7 @@ async fn main() -> Result<()> {
 
 async fn show_stats(rag_db: &RAGDatabase) -> Result<()> {
     println!("📊 RAG Database Statistics");
-    println!("=" .repeat(50));
+    println!("{}", "=".repeat(50));
     
     let stats = rag_db.get_statistics().await?;
     
@@ -148,7 +148,7 @@ async fn show_conversations(rag_db: &RAGDatabase, matches: &ArgMatches) -> Resul
         .unwrap_or(10);
     
     println!("💬 Recent Conversations (limit: {})", limit);
-    println!("=" .repeat(50));
+    println!("{}", "=".repeat(50));
     
     // This would require adding a method to RAGDatabase to get recent conversations
     println!("Feature not yet implemented - would show {} recent conversations", limit);
@@ -158,7 +158,7 @@ async fn show_conversations(rag_db: &RAGDatabase, matches: &ArgMatches) -> Resul
 
 async fn show_preferences(rag_db: &RAGDatabase) -> Result<()> {
     println!("⚙️  User Preferences");
-    println!("=" .repeat(50));
+    println!("{}", "=".repeat(50));
     
     // This would require adding a method to RAGDatabase to get preferences
     println!("Feature not yet implemented - would show user preferences");
@@ -174,7 +174,7 @@ async fn show_knowledge(rag_db: &RAGDatabase, matches: &ArgMatches) -> Result<()
     } else {
         println!("📚 Knowledge Entries (all topics)");
     }
-    println!("=" .repeat(50));
+    println!("{}", "=".repeat(50));
     
     // This would require adding a method to RAGDatabase to get knowledge entries
     println!("Feature not yet implemented - would show knowledge entries");
@@ -200,7 +200,7 @@ async fn search_knowledge(rag_db: &RAGDatabase, matches: &ArgMatches) -> Result<
     let query = matches.get_one::<String>("query").unwrap();
     
     println!("🔍 Searching for: '{}'", query);
-    println!("=" .repeat(50));
+    println!("{}", "=".repeat(50));
     
     let context = rag_db.get_rag_context(query).await?;
     

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{sqlite::SqlitePool, Row};
+use sqlx::{sqlite::{SqliteConnectOptions, SqlitePool}, Row};
 use std::collections::HashMap;
 use tracing::{info, debug, warn, error};
 use uuid::Uuid;
@@ -96,8 +96,11 @@ impl RAGDatabase {
         
         info!("Initializing RAG database at: {:?}", database_path);
         
-        let database_url = format!("sqlite:{}", database_path.display());
-        let pool = SqlitePool::connect(&database_url).await?;
+        tokio::fs::create_dir_all(&config.general.data_dir).await?;
+        let connect_options = SqliteConnectOptions::new()
+            .filename(&database_path)
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(connect_options).await?;
         
         let rag_db = Self {
             pool,

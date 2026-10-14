@@ -13,6 +13,18 @@ pub struct SpeechToText {
 impl SpeechToText {
     pub async fn new(config: &AssistantConfig) -> Result<Self> {
         info!("Initializing Speech-to-Text with engine: {}", config.stt.engine);
+        if config.stt.engine == "whisper" {
+            anyhow::ensure!(
+                config.stt.whisper_binary.exists(),
+                "whisper.cpp binary not found at {} (set stt.whisper_binary in config.toml)",
+                config.stt.whisper_binary.display()
+            );
+            anyhow::ensure!(
+                config.stt.model_path.exists(),
+                "whisper model not found at {} (set stt.model_path in config.toml)",
+                config.stt.model_path.display()
+            );
+        }
         Ok(Self {
             config: config.clone(),
         })
@@ -48,19 +60,23 @@ impl SpeechToText {
         writer.finalize()?;
 
         // Run whisper.cpp with correct model path
-        let output = TokioCommand::new("/home/edward/startrek/whisper.cpp/main")
+        let threads = std::thread::available_parallelism().map(|n| n.get().min(8)).unwrap_or(4);
+        let output = TokioCommand::new(&self.config.stt.whisper_binary)
             .arg("-m")
             .arg(&self.config.stt.model_path)
             .arg("-f")
             .arg(temp_path)
             .arg("--no-timestamps")
+            .arg("--no-prints")
+            .arg("--threads")
+            .arg(threads.to_string())
             .arg("--language")
             .arg(&self.config.stt.language)
             .output()
             .await?;
 
         if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
+            let text = strip_non_speech_tags(&String::from_utf8_lossy(&output.stdout));
             let text = text.trim();
             if !text.is_empty() && text.len() > 3 {
                 info!("Whisper transcription: {}", text);
@@ -78,4 +94,19 @@ impl SpeechToText {
         // TODO: Implement Vosk integration
         Ok(None)
     }
+}
+
+/// Remove whisper's non-speech annotations such as `[BLANK_AUDIO]` or `(wind blowing)`.
+fn strip_non_speech_tags(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut depth = 0;
+    for c in text.chars() {
+        match c {
+            '[' | '(' => depth += 1,
+            ']' | ')' if depth > 0 => depth -= 1,
+            _ if depth == 0 => result.push(c),
+            _ => {}
+        }
+    }
+    result.split_whitespace().collect::<Vec<_>>().join(" ")
 }

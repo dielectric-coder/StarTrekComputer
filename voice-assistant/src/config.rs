@@ -21,6 +21,14 @@ pub struct AudioConfig {
     pub buffer_size: usize,
     pub input_device: Option<String>,
     pub output_device: Option<String>,
+    /// Minimum RMS level (0.0-1.0) counted as speech; the detector also adapts
+    /// to the measured background noise and uses whichever is higher.
+    #[serde(default = "default_vad_threshold")]
+    pub vad_threshold: f32,
+}
+
+fn default_vad_threshold() -> f32 {
+    0.015
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +36,15 @@ pub struct SttConfig {
     pub engine: String, // "whisper" or "vosk"
     pub model_path: PathBuf,
     pub language: String,
+    /// whisper.cpp command-line binary (whisper-cli)
+    #[serde(default = "default_whisper_binary")]
+    pub whisper_binary: PathBuf,
+}
+
+fn default_whisper_binary() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_default()
+        .join("startrek/whisper.cpp/build/bin/whisper-cli")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +53,13 @@ pub struct TtsConfig {
     pub model_path: PathBuf,
     pub voice: String,
     pub speed: f32,
+    /// Piper executable; a bare name is looked up on PATH
+    #[serde(default = "default_piper_binary")]
+    pub piper_binary: PathBuf,
+}
+
+fn default_piper_binary() -> PathBuf {
+    PathBuf::from("piper")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,17 +112,20 @@ impl Default for AssistantConfig {
                 buffer_size: 1024,
                 input_device: None,  // Use system default microphone
                 output_device: None, // Use system default speaker
+                vad_threshold: default_vad_threshold(),
             },
             stt: SttConfig {
                 engine: "whisper".to_string(),
                 model_path: startrek_dir.join("whisper.cpp/models/ggml-base.en.bin"),
                 language: "en".to_string(),
+                whisper_binary: default_whisper_binary(),
             },
             tts: TtsConfig {
                 engine: "piper".to_string(),
                 model_path: startrek_dir.join("piper/voices/en_US-lessac-medium.onnx"),
                 voice: "lessac".to_string(),
                 speed: 0.9, // Slightly faster for computer-like speech
+                piper_binary: default_piper_binary(),
             },
             llm: LlmConfig {
                 base_url: "http://localhost:11434".to_string(),
