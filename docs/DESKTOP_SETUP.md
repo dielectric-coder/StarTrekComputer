@@ -192,6 +192,11 @@ Conversations are stored in `~/startrek/.voice-assistant/rag_memory.db`:
   loaded for 30 minutes.
 - **Thinking models:** requests send `think` from the config (default `false`), since
   `gemma4` thinks by default and would take 20–45 s per answer.
+- **Wrong dates ("Fourteenth of Paris"):** the prompt never included the date, and RAG
+  stored bare answers ("Affirmative. Paris.") under the catch-all `general` topic,
+  which were then injected into almost every prompt. Now the current local date and
+  time are in every prompt, knowledge is stored as "Q: … A: …", time-sensitive questions
+  (date, time, weather, news, …) aren't stored, and `general` no longer matches everything.
 - **Shutdown:** Ctrl-C logged "Shutting down" but the process kept running. It now exits.
 
 ## Testing without speaking

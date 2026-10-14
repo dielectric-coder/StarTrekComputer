@@ -96,6 +96,12 @@ impl LLMClient {
         // Build enhanced system prompt with user context
         let mut system_prompt = "You are the Starship Enterprise computer. Speak in a clipped, precise, neutral tone. Provide only the factual answer, using the fewest words possible, as in the original Star Trek series. Be direct and concise. Do not use conversational pleasantries. Always maintain a professional, analytical demeanor. Begin responses with 'Affirmative' or 'Negative' when appropriate. State facts clearly and economically.".to_string();
         
+        // The model has no clock of its own; without this it invents dates
+        system_prompt.push_str(&format!(
+            " The current local date and time is {}. Use it when asked about the date, day or time.",
+            chrono::Local::now().format("%A, %-d %B %Y, %H:%M")
+        ));
+
         // Add user preference adaptations
         system_prompt = self.adapt_to_user_preferences(&system_prompt, &rag_context);
         

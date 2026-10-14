@@ -277,13 +277,18 @@ impl RAGDatabase {
         // Extract factual information from conversations
         
         // If user asked a question and got a factual response, store as knowledge
-        if user_input.contains("what") || user_input.contains("who") || user_input.contains("when") || 
-           user_input.contains("where") || user_input.contains("how") || user_input.contains("why") {
-            
+        let input_lower = user_input.to_lowercase();
+        let is_question = ["what", "who", "when", "where", "how", "why"]
+            .iter()
+            .any(|w| input_lower.contains(w));
+
+        if is_question && !is_time_sensitive(&input_lower) {
             let topic = self.extract_topic(user_input);
-            
+            // Keep the question with the answer; a bare "Affirmative. Paris." is meaningless later
+            let content = format!("Q: {} A: {}", user_input.trim(), assistant_response.trim());
+
             if let Some(embedding_model) = &self.embedding_model {
-                let embedding = embedding_model.encode(assistant_response)?;
+                let embedding = embedding_model.encode(&content)?;
                 let embedding_bytes = bincode::serialize(&embedding)?;
 
                 let id = Uuid::new_v4();
@@ -296,7 +301,7 @@ impl RAGDatabase {
                     "#,
                 )
                 .bind(id.to_string())
-                .bind(assistant_response)
+                .bind(&content)
                 .bind("conversation")
                 .bind(&topic)
                 .bind(&embedding_bytes)
@@ -419,8 +424,10 @@ impl RAGDatabase {
     }
 
     async fn get_relevant_knowledge(&self, input: &str, limit: i32) -> Result<Vec<KnowledgeEntry>> {
-        // Simple keyword-based retrieval for now
+        // Simple keyword-based retrieval for now. "general" is the catch-all topic,
+        // so matching on it would attach unrelated entries to almost every question.
         let topic = self.extract_topic(input);
+        let topic_filter = if topic == "general" { "" } else { topic.as_str() };
         
         let rows = sqlx::query(
             r#"
@@ -431,7 +438,7 @@ impl RAGDatabase {
             LIMIT ?3
             "#,
         )
-        .bind(&topic)
+        .bind(topic_filter)
         .bind(input)
         .bind(limit)
         .fetch_all(&self.pool)
@@ -616,4 +623,14 @@ impl RAGDatabase {
 
         Ok(())
     }
+}
+/// Answers to these go stale (or were guessed), so they must not be stored as knowledge.
+fn is_time_sensitive(input_lower: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "date", "day", "time", "today", "tonight", "tomorrow", "yesterday", "now",
+        "current", "currently", "latest", "news", "weather", "moon", "stardate",
+    ];
+    input_lower
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|word| WORDS.contains(&word))
 }
