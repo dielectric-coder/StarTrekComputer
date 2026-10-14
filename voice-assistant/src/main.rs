@@ -9,6 +9,7 @@ mod llm;
 mod rag;
 mod search;
 mod stt;
+mod tools;
 mod tts;
 mod vad;
 mod wake_word;
@@ -18,6 +19,7 @@ use config::AssistantConfig;
 use llm::LLMClient;
 use search::{WebSearcher, SearchResults};
 use stt::SpeechToText;
+use tools::ToolBox;
 use tts::TextToSpeech;
 use wake_word::WakeWordDetector;
 
@@ -47,6 +49,7 @@ pub struct VoiceAssistant {
     tts: Arc<TextToSpeech>,
     llm: Arc<LLMClient>,
     searcher: Arc<WebSearcher>,
+    tools: Arc<ToolBox>,
     wake_word: Arc<Mutex<WakeWordDetector>>,
     command_tx: mpsc::UnboundedSender<AssistantCommand>,
     command_rx: Arc<Mutex<mpsc::UnboundedReceiver<AssistantCommand>>>,
@@ -60,15 +63,16 @@ impl VoiceAssistant {
     pub async fn new(config: AssistantConfig) -> Result<Self> {
         info!("Initializing Voice Assistant...");
 
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+
         let audio_manager = Arc::new(AudioManager::new(&config).await?);
         let stt = Arc::new(SpeechToText::new(&config).await?);
         let tts = Arc::new(TextToSpeech::new(&config).await?);
-        let llm = Arc::new(LLMClient::new(&config).await?);
+        let tools = Arc::new(ToolBox::new(&config, command_tx.clone()).await?);
+        let llm = Arc::new(LLMClient::new(&config, tools.clone()).await?);
         let searcher = Arc::new(WebSearcher::new(&config));
         let wake_word = Arc::new(Mutex::new(WakeWordDetector::new(&config).await?));
-
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         Ok(Self {
             config,
@@ -77,6 +81,7 @@ impl VoiceAssistant {
             tts,
             llm,
             searcher,
+            tools,
             wake_word,
             command_tx,
             command_rx: Arc::new(Mutex::new(command_rx)),
@@ -145,7 +150,14 @@ impl VoiceAssistant {
             }
             
             AssistantCommand::ProcessAudio(audio_data) => {
-                if *self.is_listening.lock().await {
+                if self.tools.is_logging().await {
+                    // Captain's log dictation: everything goes into the log until "end log"
+                    if let Some(text) = self.stt.transcribe(&audio_data).await? {
+                        if let Some(speech) = self.tools.log_dictation(&text).await? {
+                            self.speak(&speech).await?;
+                        }
+                    }
+                } else if *self.is_listening.lock().await {
                     self.process_audio_data(audio_data).await?;
                 } else {
                     // Check for wake word
@@ -300,8 +312,12 @@ impl VoiceAssistant {
 
     /// Speak with the microphone muted so the assistant doesn't hear itself.
     async fn speak(&self, text: &str) -> Result<()> {
+        let text = clean_for_speech(text);
+        if text.is_empty() {
+            return Ok(());
+        }
         self.audio_manager.pause_capture();
-        let result = self.tts.speak(text).await;
+        let result = self.tts.speak(&text).await;
         self.audio_manager.resume_capture();
         result
     }
@@ -366,6 +382,25 @@ impl VoiceAssistant {
             input.trim().to_string()
         }
     }
+}
+
+/// Strip markdown the LLM sometimes produces, which TTS would read out or stumble over.
+fn clean_for_speech(text: &str) -> String {
+    let mut sentences = Vec::new();
+    for line in text.lines() {
+        let line = line.trim().trim_start_matches(['#', '-', '*', '•']).trim();
+        let line: String = line.chars().filter(|c| !matches!(c, '*' | '`' | '#' | '_')).collect();
+        if line.is_empty() {
+            continue;
+        }
+        let mut line = line.trim().to_string();
+        // Join list items and lines as separate sentences
+        if !line.ends_with(['.', '!', '?', ':', ',']) {
+            line.push('.');
+        }
+        sentences.push(line);
+    }
+    sentences.join(" ")
 }
 
 #[tokio::main]

@@ -32,6 +32,35 @@ After answering it returns to waiting for the wake word.
 - Requests containing "search", "look up" or "find information" try the web search
   script (`~/startrek/search_tool.py`). If it isn't installed they fall back to the LLM.
 
+## Voice commands
+
+Besides answering questions, the assistant can run actions. The LLM picks the right one
+through Ollama tool calling, so the wording doesn't have to be exact.
+
+| Feature | Say, for example | Result |
+|---|---|---|
+| Timer | "Computer, set a timer for 10 minutes for the tea" | "Timer set for 10 minutes: tea." … later "Timer complete: tea." plus a desktop notification |
+| Reminder | "Computer, remind me at 15:00 to call Paul" / "remind me in 20 minutes to check the oven" | Spoken and shown as a notification when due |
+| List | "Computer, what timers are active?" | Remaining time of each timer, and reminder times |
+| Cancel | "Computer, cancel the tea timer" / "cancel all timers" | "Cancelled." |
+| Status report | "Computer, status report" / "how much battery is left?" | Battery, CPU load and temperature, memory, disk, uptime |
+| Volume | "Computer, set the volume to 40 percent" / "louder" / "quieter" / "mute" | "Volume 40 percent." |
+| Captain's log | "Computer, begin captain's log" … dictate … "End log." | "Captain's log, stardate 2026.287. Recording." … "Log entry recorded, 15 words." |
+| Read the log | "Computer, read back today's captain's log" / "yesterday's log" | Reads each entry with its stardate |
+
+- **Reminders survive restarts.** They're stored in `~/startrek/.voice-assistant/reminders.json`.
+  Any that came due while the assistant was off are announced at startup. Timers are
+  memory-only.
+- **Captain's log** entries are saved as one Markdown file per day in
+  `~/startrek/.voice-assistant/captains_log/YYYY-MM-DD.md`. While recording, the wake word
+  isn't needed and everything you say is written down. Finish with "end log" (or
+  "end of log", "stop recording"). It only counts at the end of a sentence, so the words
+  can still appear in dictation. A recording stops on its own after 60 s of silence.
+- **Stardates** are year and day of year (`2026.287`), as in the 2009 Star Trek film.
+- Answers from actions aren't stored as RAG knowledge.
+
+The full list of ideas for further features is in [ROADMAP.md](ROADMAP.md).
+
 ## Prerequisites
 
 | Component | Location | How to install |
@@ -224,6 +253,9 @@ LLM response: Affirmative. Paris.
 Stop the service first so it doesn't answer too.
 
 ## Known gaps
+
+- Every command is preceded by "You have requested… Processing…", which adds about 7 s
+  before quick actions like timers and volume changes.
 
 - `AudioManager::play_audio` is still a stub. All speech goes through piper + `aplay`.
 - `~/startrek/search_tool.py` isn't installed, so search requests fall back to the LLM.

@@ -185,7 +185,7 @@ impl RAGDatabase {
         Ok(())
     }
 
-    pub async fn store_conversation(&self, user_input: &str, assistant_response: &str, context_used: Option<&str>) -> Result<Uuid> {
+    pub async fn store_conversation(&self, user_input: &str, assistant_response: &str, context_used: Option<&str>, learn_knowledge: bool) -> Result<Uuid> {
         let id = Uuid::new_v4();
         let timestamp = Utc::now();
 
@@ -208,7 +208,9 @@ impl RAGDatabase {
 
         // Learn from this conversation
         self.learn_user_preferences(user_input, assistant_response).await?;
-        self.extract_knowledge(user_input, assistant_response).await?;
+        if learn_knowledge {
+            self.extract_knowledge(user_input, assistant_response).await?;
+        }
 
         Ok(id)
     }
