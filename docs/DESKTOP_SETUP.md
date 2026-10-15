@@ -30,7 +30,7 @@ Stop with Ctrl-C.
 
 - **One breath:** "Computer, what is the speed of light?" It confirms the request
   ("You have requested: …"), says "Processing…", and answers.
-- **Two steps:** "Computer" … *"I'm listening"* … then ask your question.
+- **Two steps:** "Computer" … *chirp* … then ask your question.
 
 After answering it returns to waiting for the wake word.
 
@@ -137,12 +137,13 @@ Restart the assistant after editing it.
 | `[tts] engine` | `"kokoro"` | `"piper"` or `"kokoro"` |
 | `[tts] voice` | `"af_sky"` | Kokoro voice name (Piper uses `model_path` instead) |
 | `[tts] speed` | `1.0` | Speech rate; 1.0 = the voice's natural pace, lower = slower (0.77 suited lessac) |
+| `[tts] listening_sound` | `"chirp"` (default) | Played after "Computer" on its own: `"chirp"` (a synthesized TNG-style blip), `"voice"` (says "I'm listening") or a path to a WAV file |
 | `[tts] piper_binary` | `"piper"` (default) | Piper executable; a bare name is looked up on `PATH`. If `piper` isn't on `PATH`, the default is the standalone binary that `scripts/install.sh` unpacks (`piper/piper/piper`) |
 | `[stt] whisper_binary` | `~/startrek/whisper.cpp/build/bin/whisper-cli` (default) | whisper.cpp CLI |
 | `[audio] vad_threshold` | `0.015` (default), `0.006` on laptop 2 | Minimum RMS treated as speech. Lower it if quiet speech is missed, raise it if noise triggers it |
 | `[audio] input_device` | unset (system default) | A source name from `pactl list short sources` |
 
-`piper_binary`, `kokoro_python`, `kokoro_model`, `kokoro_voices`, `whisper_binary`, `vad_threshold` and `think` are optional, so older config
+`piper_binary`, `listening_sound`, `kokoro_python`, `kokoro_model`, `kokoro_voices`, `whisper_binary`, `vad_threshold` and `think` are optional, so older config
 files keep working.
 
 ## If it doesn't react to "Computer"

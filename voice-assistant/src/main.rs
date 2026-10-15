@@ -140,8 +140,10 @@ impl VoiceAssistant {
                 info!("Starting to listen for voice commands");
                 *self.is_listening.lock().await = true;
                 
-                // Play acknowledgment sound
-                self.speak("I'm listening").await?;
+                self.audio_manager.pause_capture();
+                let result = self.tts.play_listening_sound().await;
+                self.audio_manager.resume_capture();
+                result?;
             }
             
             AssistantCommand::StopListening => {

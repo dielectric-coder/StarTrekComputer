@@ -52,6 +52,26 @@ impl TextToSpeech {
         })
     }
 
+    /// Acknowledge the wake word, as the ship's computer does with a chirp
+    pub async fn play_listening_sound(&self) -> Result<()> {
+        match self.config.tts.listening_sound.as_str() {
+            "chirp" => play_pcm(&listening_chirp(CHIRP_SAMPLE_RATE), CHIRP_SAMPLE_RATE).await,
+            "voice" => self.speak("I'm listening").await,
+            path => {
+                let status = Command::new("aplay")
+                    .arg("-q")
+                    .arg(path)
+                    .status()
+                    .await
+                    .context("failed to start aplay for the listening sound")?;
+                if !status.success() {
+                    bail!("could not play listening sound {}", path);
+                }
+                Ok(())
+            }
+        }
+    }
+
     pub async fn speak(&self, text: &str) -> Result<()> {
         match self.config.tts.engine.as_str() {
             "piper" => self.speak_piper(text).await,
@@ -213,6 +233,41 @@ fn kokoro_language(voice: &str) -> &'static str {
     }
 }
 
+const CHIRP_SAMPLE_RATE: u32 = 22050;
+
+/// A short rising three-note blip in the style of the TNG computer's acknowledgement,
+/// as 16-bit little-endian mono PCM. Synthesized, so no recording of the show is needed.
+fn listening_chirp(sample_rate: u32) -> Vec<u8> {
+    // E6, A6, D7: rising fourths, short and bright
+    const NOTES: [(f32, f32); 3] = [(1318.5, 0.07), (1760.0, 0.07), (2349.3, 0.11)];
+    const GAP: f32 = 0.015;
+    let rate = sample_rate as f32;
+    let mut samples: Vec<f32> = Vec::new();
+
+    for (freq, duration) in NOTES {
+        let len = (duration * rate) as usize;
+        let attack = (0.004 * rate) as usize;
+        for i in 0..len {
+            // Fast attack, then a quadratic decay, like a struck electronic tone
+            let envelope = if i < attack {
+                i as f32 / attack as f32
+            } else {
+                (1.0 - (i - attack) as f32 / (len - attack) as f32).powi(2)
+            };
+            let phase = std::f32::consts::TAU * freq * i as f32 / rate;
+            // A little third harmonic gives it an electronic edge
+            let tone = (phase.sin() + 0.2 * (3.0 * phase).sin()) / 1.2;
+            samples.push(0.3 * envelope * tone);
+        }
+        samples.extend(std::iter::repeat(0.0).take((GAP * rate) as usize));
+    }
+
+    samples
+        .iter()
+        .flat_map(|s| ((s * i16::MAX as f32) as i16).to_le_bytes())
+        .collect()
+}
+
 async fn play_pcm(pcm: &[u8], sample_rate: u32) -> Result<()> {
     let mut play_cmd = Command::new("aplay")
         .arg("-f")
@@ -241,4 +296,19 @@ fn read_voice_sample_rate(model_path: &std::path::Path) -> Option<u32> {
     let content = std::fs::read_to_string(config_path).ok()?;
     let json: serde_json::Value = serde_json::from_str(&content).ok()?;
     json["audio"]["sample_rate"].as_u64().map(|rate| rate as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chirp_is_short_and_not_clipped() {
+        let pcm = listening_chirp(CHIRP_SAMPLE_RATE);
+        let samples: Vec<i16> = pcm.chunks(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+        let seconds = samples.len() as f32 / CHIRP_SAMPLE_RATE as f32;
+        assert!((0.2..0.4).contains(&seconds), "chirp lasts {}s", seconds);
+        let peak = samples.iter().map(|s| s.unsigned_abs()).max().unwrap();
+        assert!(peak > 5000 && peak < 16000, "peak {}", peak);
+    }
 }

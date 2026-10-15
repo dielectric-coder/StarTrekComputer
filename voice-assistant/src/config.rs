@@ -56,6 +56,10 @@ pub struct TtsConfig {
     /// Piper executable; a bare name is looked up on PATH
     #[serde(default = "default_piper_binary")]
     pub piper_binary: PathBuf,
+    /// Played after "Computer": "chirp" (synthesized), "voice" ("I'm listening"),
+    /// or the path to a WAV file
+    #[serde(default = "default_listening_sound")]
+    pub listening_sound: String,
     /// Python interpreter with the kokoro-onnx package installed
     #[serde(default = "default_kokoro_python")]
     pub kokoro_python: PathBuf,
@@ -75,6 +79,10 @@ fn default_kokoro_model() -> PathBuf {
 
 fn default_kokoro_voices() -> PathBuf {
     dirs::home_dir().unwrap_or_default().join(".local/share/kokoro-models/voices-v1.0.bin")
+}
+
+fn default_listening_sound() -> String {
+    "chirp".to_string()
 }
 
 fn default_piper_binary() -> PathBuf {
@@ -174,6 +182,7 @@ impl Default for AssistantConfig {
                 voice: "lessac".to_string(),
                 speed: 0.9, // Slightly faster for computer-like speech
                 piper_binary: default_piper_binary(),
+                listening_sound: default_listening_sound(),
                 kokoro_python: default_kokoro_python(),
                 kokoro_model: default_kokoro_model(),
                 kokoro_voices: default_kokoro_voices(),

@@ -30,7 +30,8 @@ Status: ✅ done · 🔜 planned / easy next step · 💡 idea
 | | Feature | Notes |
 |---|---|---|
 | ✅ | Stardates | Captain's log entries are dated `YEAR.DAY-OF-YEAR` (e.g. 2026.287) |
-| 💡 | Computer chirps | Short "bleep" sounds instead of "I'm listening" / "Processing…" |
+| ✅ | Computer chirp | Synthesized TNG-style blip instead of "I'm listening" (`tts.listening_sound`) |
+| 💡 | Processing chirp | Same for "Processing…" |
 | 💡 | Red alert | Klaxon sound on command |
 | ✅ | Kokoro voices | `tts.engine = "kokoro"`: 28 natural-sounding English voices (default `af_sky`) |
 | 💡 | Fan computer voices | Community Piper voices resemble the TNG computer (e.g. *fedcomp*, *ships_computer*); unofficial, check their terms |
