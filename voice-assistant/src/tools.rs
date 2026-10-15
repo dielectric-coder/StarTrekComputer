@@ -604,17 +604,16 @@ async fn cpu_temperature() -> Option<f64> {
 }
 
 async fn set_volume(args: &Value) -> Result<ToolOutput> {
-    const SINK: &str = "@DEFAULT_AUDIO_SINK@";
     let level = args.get("level").and_then(Value::as_f64);
     let change = args.get("change").and_then(Value::as_f64);
     let mute = args.get("mute").and_then(Value::as_bool);
+    let mixer = Mixer::detect();
 
     if let Some(level) = level {
-        let level = (level.clamp(0.0, 100.0) / 100.0).to_string();
-        wpctl(&["set-volume", SINK, &level]).await?;
+        mixer.set_percent(level.clamp(0.0, 100.0)).await?;
     } else if let Some(change) = change {
-        let step = format!("{:.0}%{}", change.abs(), if change >= 0.0 { "+" } else { "-" });
-        wpctl(&["set-volume", "--limit", "1.0", SINK, &step]).await?;
+        let (current, _) = mixer.get().await?;
+        mixer.set_percent((current + change).clamp(0.0, 100.0)).await?;
     } else if mute.is_none() {
         bail!("give level, change or mute");
     }
@@ -622,29 +621,96 @@ async fn set_volume(args: &Value) -> Result<ToolOutput> {
     // Changing the volume implies the user wants to hear it
     let mute = mute.or(if level.is_some() || change.is_some() { Some(false) } else { None });
     if let Some(mute) = mute {
-        wpctl(&["set-mute", SINK, if mute { "1" } else { "0" }]).await?;
+        mixer.set_mute(mute).await?;
     }
 
-    // "Volume: 0.40" or "Volume: 0.40 [MUTED]"
-    let current = wpctl(&["get-volume", SINK]).await?;
-    if current.contains("MUTED") {
+    let (percent, muted) = mixer.get().await?;
+    if muted {
         return Ok(ToolOutput::speak("Audio muted."));
     }
-    let percent = current
+    Ok(ToolOutput::speak(format!("Volume {} percent.", percent.round())))
+}
+
+/// Volume control for the default output: wpctl on PipeWire, pactl otherwise
+/// (PulseAudio, or PipeWire without WirePlumber's CLI).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Mixer {
+    Wpctl,
+    Pactl,
+}
+
+impl Mixer {
+    fn detect() -> Self {
+        if on_path("wpctl") { Mixer::Wpctl } else { Mixer::Pactl }
+    }
+
+    /// Current volume in percent and whether the output is muted
+    async fn get(self) -> Result<(f64, bool)> {
+        match self {
+            Mixer::Wpctl => parse_wpctl_volume(&mixer_cmd("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"]).await?),
+            Mixer::Pactl => {
+                let volume = mixer_cmd("pactl", &["get-sink-volume", "@DEFAULT_SINK@"]).await?;
+                let mute = mixer_cmd("pactl", &["get-sink-mute", "@DEFAULT_SINK@"]).await?;
+                Ok((parse_pactl_volume(&volume)?, mute.contains("yes")))
+            }
+        }
+    }
+
+    async fn set_percent(self, percent: f64) -> Result<()> {
+        let percent = format!("{:.0}%", percent);
+        match self {
+            Mixer::Wpctl => mixer_cmd("wpctl", &["set-volume", "@DEFAULT_AUDIO_SINK@", &percent]).await,
+            Mixer::Pactl => mixer_cmd("pactl", &["set-sink-volume", "@DEFAULT_SINK@", &percent]).await,
+        }
+        .map(|_| ())
+    }
+
+    async fn set_mute(self, mute: bool) -> Result<()> {
+        let flag = if mute { "1" } else { "0" };
+        match self {
+            Mixer::Wpctl => mixer_cmd("wpctl", &["set-mute", "@DEFAULT_AUDIO_SINK@", flag]).await,
+            Mixer::Pactl => mixer_cmd("pactl", &["set-sink-mute", "@DEFAULT_SINK@", flag]).await,
+        }
+        .map(|_| ())
+    }
+}
+
+fn on_path(program: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
+        .unwrap_or(false)
+}
+
+async fn mixer_cmd(program: &str, args: &[&str]) -> Result<String> {
+    // pactl translates its output ("Mute: oui"); keep it parseable
+    let output = Command::new(program)
+        .args(args)
+        .env("LC_ALL", "C")
+        .output()
+        .await
+        .with_context(|| format!("failed to run {}", program))?;
+    if !output.status.success() {
+        bail!("{} {} failed: {}", program, args.join(" "), String::from_utf8_lossy(&output.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// "Volume: 0.40" or "Volume: 0.40 [MUTED]"
+fn parse_wpctl_volume(output: &str) -> Result<(f64, bool)> {
+    let volume = output
         .split_whitespace()
         .nth(1)
         .and_then(|v| v.parse::<f64>().ok())
-        .map(|v| (v * 100.0).round())
         .context("could not read the volume")?;
-    Ok(ToolOutput::speak(format!("Volume {} percent.", percent)))
+    Ok((volume * 100.0, output.contains("MUTED")))
 }
 
-async fn wpctl(args: &[&str]) -> Result<String> {
-    let output = Command::new("wpctl").args(args).output().await.context("failed to run wpctl")?;
-    if !output.status.success() {
-        bail!("wpctl {} failed: {}", args.join(" "), String::from_utf8_lossy(&output.stderr).trim());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+/// "Volume: front-left: 41944 /  64% / -11.63 dB,   front-right: ..." (first channel)
+fn parse_pactl_volume(output: &str) -> Result<f64> {
+    output
+        .split_whitespace()
+        .find_map(|word| word.strip_suffix('%')?.parse::<f64>().ok())
+        .context("could not read the volume")
 }
 
 /// Year and day of year, in the style of the Star Trek (2009) films: 2026.287.
@@ -693,4 +759,22 @@ fn describe_when(due: DateTime<Local>) -> String {
         _ => due.format("%A %-d %B").to_string(),
     };
     format!("{} {}", due.format("%H:%M"), day)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_wpctl_volume() {
+        assert_eq!(parse_wpctl_volume("Volume: 0.40").unwrap(), (40.0, false));
+        assert_eq!(parse_wpctl_volume("Volume: 0.40 [MUTED]").unwrap(), (40.0, true));
+    }
+
+    #[test]
+    fn parses_pactl_volume() {
+        let output = "Volume: front-left: 41944 /  64% / -11.63 dB,   front-right: 41944 /  64% / -11.63 dB\n        balance 0.00";
+        assert_eq!(parse_pactl_volume(output).unwrap(), 64.0);
+        assert!(parse_pactl_volume("garbage").is_err());
+    }
 }

@@ -19,7 +19,7 @@ Status: ✅ done · 🔜 planned / easy next step · 💡 idea
 | ✅ | Timers | "Computer, set a timer for 10 minutes" / "cancel the timer" | — |
 | ✅ | Reminders | "Remind me at 3 pm to call Paul" (spoken + desktop notification, survives restarts) | `notify-send` |
 | ✅ | Status report | "Computer, status report" → battery, CPU, memory, disk, uptime | — |
-| ✅ | Volume control | "Set volume to 40 percent", "louder", "mute" | `wpctl` (PipeWire) |
+| ✅ | Volume control | "Set volume to 40 percent", "louder", "mute" | `wpctl` (PipeWire), else `pactl` (PulseAudio) |
 | ✅ | Captain's log | "Begin captain's log" … "end log"; "read back today's log" | — |
 | 🔜 | Notes and dictation | "Take a note: buy coffee filters", "what are my notes?" | — |
 | 🔜 | Open things | "Open my downloads folder", "open GitHub" | `xdg-open` |
