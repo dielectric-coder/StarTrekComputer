@@ -71,6 +71,7 @@ The full list of ideas for further features is in [ROADMAP.md](ROADMAP.md).
 | Whisper model | `~/startrek/whisper.cpp/models/ggml-base.en.bin` | see below |
 | Piper (Python `piper-tts`) | on `PATH`, e.g. `~/.local/bin/piper` | `pip install --user piper-tts` |
 | Piper voice | `~/startrek/piper/voices/en_US-lessac-medium.onnx` (+ `.onnx.json`) | see below |
+| Kokoro (optional, more natural voice) | `~/.local/share/kokoro-models/` | see below |
 | Ollama ≥ 0.30.9 + a model | `http://localhost:11434` | `ollama pull gemma4:12b` |
 
 ### whisper.cpp
@@ -90,6 +91,32 @@ sh ./models/download-ggml-model.sh base.en
 python -m piper.download_voices --download-dir ~/startrek/piper/voices en_US-lessac-medium
 ```
 
+### Kokoro voices (optional)
+
+Kokoro sounds more natural than Piper and is about as fast once loaded. It needs the
+`kokoro-onnx` Python package and the model files:
+
+```bash
+uv tool install kokoro-tts      # provides a Python with kokoro-onnx
+mkdir -p ~/.local/share/kokoro-models && cd ~/.local/share/kokoro-models
+wget https://github.com/nazdridoy/kokoro-tts/releases/download/v1.0.0/kokoro-v1.0.onnx
+wget https://github.com/nazdridoy/kokoro-tts/releases/download/v1.0.0/voices-v1.0.bin
+```
+
+Then set in `config.toml`:
+
+```toml
+[tts]
+engine = "kokoro"
+voice = "af_sky"     # af_* American, bf_* British; run `kokoro-tts --help-voices` for all
+speed = 1.0
+kokoro_python = "/home/<you>/.local/share/uv/tools/kokoro-tts/bin/python3"
+```
+
+The assistant runs a small helper (embedded in the binary, written to the data directory)
+that keeps the model loaded, so each sentence takes about 1 s to synthesize. A wrong
+voice name is reported at startup with the list of available voices.
+
 ## Configuration
 
 `~/startrek/.voice-assistant/config.toml` is created with defaults on first run.
@@ -99,13 +126,15 @@ Restart the assistant after editing it.
 |---|---|---|
 | `[llm] model` | `"gemma4:12b"` | Any model pulled in Ollama (see [Choosing a model](#choosing-a-model)) |
 | `[llm] think` | `false` (default) | Let reasoning models think before answering. 20–45 s per answer on this hardware |
-| `[tts] speed` | `0.77` | Speech rate; 1.0 = the voice's natural pace, lower = slower |
+| `[tts] engine` | `"kokoro"` | `"piper"` or `"kokoro"` |
+| `[tts] voice` | `"af_sky"` | Kokoro voice name (Piper uses `model_path` instead) |
+| `[tts] speed` | `1.0` | Speech rate; 1.0 = the voice's natural pace, lower = slower (0.77 suited lessac) |
 | `[tts] piper_binary` | `"piper"` (default) | Piper executable; a bare name is looked up on `PATH` |
 | `[stt] whisper_binary` | `~/startrek/whisper.cpp/build/bin/whisper-cli` (default) | whisper.cpp CLI |
 | `[audio] vad_threshold` | `0.015` (default) | Minimum RMS treated as speech. Lower it if quiet speech is missed, raise it if noise triggers it |
 | `[audio] input_device` | unset (system default) | A source name from `pactl list short sources` |
 
-`piper_binary`, `whisper_binary`, `vad_threshold` and `think` are optional, so older config
+`piper_binary`, `kokoro_python`, `kokoro_model`, `kokoro_voices`, `whisper_binary`, `vad_threshold` and `think` are optional, so older config
 files keep working.
 
 ## Choosing a model
@@ -253,6 +282,11 @@ LLM response: Affirmative. Paris.
 Stop the service first so it doesn't answer too.
 
 ## Known gaps
+
+- **Slow answers under memory pressure.** gemma4 (8 GB) runs from a memory-mapped file.
+  With no swap and little free RAM, Linux evicts parts of it and answers slow from about
+  2 s to 20 s (1 token/s). `ollama stop gemma4:12b` (the assistant reloads it) restores
+  normal speed. Check with `free -h`: "available" should stay well above 8 GB.
 
 - Every command is preceded by "You have requested… Processing…", which adds about 7 s
   before quick actions like timers and volume changes.

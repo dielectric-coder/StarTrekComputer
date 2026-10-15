@@ -49,13 +49,34 @@ fn default_whisper_binary() -> PathBuf {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TtsConfig {
-    pub engine: String, // "piper"
+    pub engine: String, // "piper" or "kokoro"
+    /// Piper voice model
     pub model_path: PathBuf,
+    /// Kokoro voice name, e.g. "af_sky" (unused by piper, which uses model_path)
     pub voice: String,
     pub speed: f32,
     /// Piper executable; a bare name is looked up on PATH
     #[serde(default = "default_piper_binary")]
     pub piper_binary: PathBuf,
+    /// Python interpreter with the kokoro-onnx package installed
+    #[serde(default = "default_kokoro_python")]
+    pub kokoro_python: PathBuf,
+    #[serde(default = "default_kokoro_model")]
+    pub kokoro_model: PathBuf,
+    #[serde(default = "default_kokoro_voices")]
+    pub kokoro_voices: PathBuf,
+}
+
+fn default_kokoro_python() -> PathBuf {
+    PathBuf::from("python3")
+}
+
+fn default_kokoro_model() -> PathBuf {
+    dirs::home_dir().unwrap_or_default().join(".local/share/kokoro-models/kokoro-v1.0.onnx")
+}
+
+fn default_kokoro_voices() -> PathBuf {
+    dirs::home_dir().unwrap_or_default().join(".local/share/kokoro-models/voices-v1.0.bin")
 }
 
 fn default_piper_binary() -> PathBuf {
@@ -129,6 +150,9 @@ impl Default for AssistantConfig {
                 voice: "lessac".to_string(),
                 speed: 0.9, // Slightly faster for computer-like speech
                 piper_binary: default_piper_binary(),
+                kokoro_python: default_kokoro_python(),
+                kokoro_model: default_kokoro_model(),
+                kokoro_voices: default_kokoro_voices(),
             },
             llm: LlmConfig {
                 base_url: "http://localhost:11434".to_string(),
