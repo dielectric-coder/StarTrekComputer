@@ -104,7 +104,7 @@ deploy_application() {
     chown -R $SERVICE_USER:$SERVICE_GROUP $INSTALL_DIR
     
     # Create executable symlinks
-    ln -sf $INSTALL_DIR/StarTrekComputer/voice-assistant/target/release/voice-assistant /usr/local/bin/startrek-computer
+    ln -sf $INSTALL_DIR/startrek/voice-assistant/target/release/voice-assistant /usr/local/bin/startrek-computer
     
     # Make scripts executable
     chmod +x $INSTALL_DIR/startrek/install.sh

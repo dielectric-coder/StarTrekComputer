@@ -11,7 +11,7 @@ StartLimitBurst=3
 Type=simple
 User=startrek
 Group=audio
-ExecStart=/opt/startrek/StarTrekComputer/voice-assistant/target/release/voice-assistant
+ExecStart=/opt/startrek/startrek/voice-assistant/target/release/voice-assistant
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10
@@ -24,7 +24,7 @@ Environment=RUST_LOG=info
 Environment=RUST_BACKTRACE=1
 Environment=OLLAMA_HOST=http://localhost:11434
 Environment=HOME=/var/lib/startrek-computer
-WorkingDirectory=/opt/startrek/StarTrekComputer
+WorkingDirectory=/opt/startrek/startrek
 
 # Logging
 StandardOutput=journal
