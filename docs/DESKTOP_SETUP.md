@@ -137,7 +137,7 @@ Restart the assistant after editing it.
 | `[tts] engine` | `"kokoro"` | `"piper"` or `"kokoro"` |
 | `[tts] voice` | `"af_sky"` | Kokoro voice name (Piper uses `model_path` instead) |
 | `[tts] speed` | `1.0` | Speech rate; 1.0 = the voice's natural pace, lower = slower (0.77 suited lessac) |
-| `[tts] piper_binary` | `"piper"` (default) | Piper executable; a bare name is looked up on `PATH` |
+| `[tts] piper_binary` | `"piper"` (default) | Piper executable; a bare name is looked up on `PATH`. If `piper` isn't on `PATH`, the default is the standalone binary that `scripts/install.sh` unpacks (`piper/piper/piper`) |
 | `[stt] whisper_binary` | `~/startrek/whisper.cpp/build/bin/whisper-cli` (default) | whisper.cpp CLI |
 | `[audio] vad_threshold` | `0.015` (default), `0.006` on laptop 2 | Minimum RMS treated as speech. Lower it if quiet speech is missed, raise it if noise triggers it |
 | `[audio] input_device` | unset (system default) | A source name from `pactl list short sources` |

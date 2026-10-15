@@ -641,7 +641,7 @@ enum Mixer {
 
 impl Mixer {
     fn detect() -> Self {
-        if on_path("wpctl") { Mixer::Wpctl } else { Mixer::Pactl }
+        if crate::config::on_path("wpctl") { Mixer::Wpctl } else { Mixer::Pactl }
     }
 
     /// Current volume in percent and whether the output is muted
@@ -673,12 +673,6 @@ impl Mixer {
         }
         .map(|_| ())
     }
-}
-
-fn on_path(program: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
-        .unwrap_or(false)
 }
 
 async fn mixer_cmd(program: &str, args: &[&str]) -> Result<String> {

@@ -168,8 +168,8 @@ install_whisper() {
         cd whisper.cpp
     fi
     
-    # Build for ARM64
-    make clean
+    # Build for ARM64 (whisper.cpp's Makefile wraps CMake: build/bin/whisper-cli)
+    rm -rf build
     make -j4
     
     # Download model
@@ -382,7 +382,7 @@ run_tests() {
     
     # Test Whisper
     log_info "Testing Speech Recognition..."
-    if echo "test" | $INSTALL_DIR/startrek/whisper.cpp/main -m $INSTALL_DIR/startrek/whisper.cpp/models/ggml-base.en.bin -f - >/dev/null 2>&1; then
+    if echo "test" | $INSTALL_DIR/startrek/whisper.cpp/build/bin/whisper-cli -m $INSTALL_DIR/startrek/whisper.cpp/models/ggml-base.en.bin -f - >/dev/null 2>&1; then
         log_success "✓ STT test passed"
     else
         log_warn "✗ STT test failed"

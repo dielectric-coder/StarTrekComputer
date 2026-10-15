@@ -42,9 +42,7 @@ pub struct SttConfig {
 }
 
 fn default_whisper_binary() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_default()
-        .join("startrek/whisper.cpp/build/bin/whisper-cli")
+    install_dir().join("whisper.cpp/build/bin/whisper-cli")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,7 +78,33 @@ fn default_kokoro_voices() -> PathBuf {
 }
 
 fn default_piper_binary() -> PathBuf {
-    PathBuf::from("piper")
+    // Python piper-tts is on PATH; scripts/install.sh unpacks the standalone binary instead
+    let bundled = install_dir().join("piper/piper/piper");
+    if !on_path("piper") && bundled.is_file() {
+        bundled
+    } else {
+        PathBuf::from("piper")
+    }
+}
+
+/// Where whisper.cpp, piper and the voices are installed: ~/startrek, or for the
+/// system service set up by scripts/install.sh (whose home is /var/lib/startrek-computer),
+/// the copy in /opt/startrek/startrek.
+pub fn install_dir() -> PathBuf {
+    let home = dirs::home_dir().unwrap_or_default().join("startrek");
+    let system = PathBuf::from("/opt/startrek/startrek");
+    let has_tools = |dir: &PathBuf| dir.join("whisper.cpp").is_dir() || dir.join("piper").is_dir();
+    if !has_tools(&home) && has_tools(&system) {
+        system
+    } else {
+        home
+    }
+}
+
+pub fn on_path(program: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,7 +151,7 @@ pub struct GeneralConfig {
 impl Default for AssistantConfig {
     fn default() -> Self {
         let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/edward"));
-        let startrek_dir = home_dir.join("startrek");
+        let startrek_dir = install_dir();
         
         Self {
             audio: AudioConfig {
@@ -181,7 +205,8 @@ impl Default for AssistantConfig {
             },
             general: GeneralConfig {
                 log_level: "info".to_string(),
-                data_dir: startrek_dir.join(".voice-assistant"),
+                // Always under home: /opt is read-only for the system service
+                data_dir: home_dir.join("startrek/.voice-assistant"),
             },
         }
     }
