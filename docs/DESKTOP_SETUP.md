@@ -5,7 +5,15 @@ audio through PipeWire/PulseAudio, instead of the `/opt/startrek` server install
 described in [INSTALL.md](INSTALL.md). It also records the fixes that were needed to
 get the Rust assistant building and working end to end (commit `134dca3`).
 
-Tested on Manjaro (kernel 6.18), Rust stable, PipeWire, Ollama 0.40 with `gemma4:12b`.
+Tested on two machines:
+
+| Machine | OS | Hardware | Ollama | Model |
+|---|---|---|---|---|
+| Laptop 1 | Manjaro (kernel 6.18) | i7-11800H, 4 GB RTX A2000 Laptop GPU | 0.40 | `gemma4:12b` |
+| Laptop 2 | CachyOS (kernel 7.2) | Ryzen AI 9 HX 370, Radeon 890M iGPU, 86 GB RAM | 0.30.7 | `gemma4:26b` |
+
+Both use Rust stable, PipeWire and the repo at `~/Workspace/GitSpace/StarTrekComputer`
+(laptop 1 had it at `~/GitSpace/StarTrekComputer`).
 
 ## Quick start
 
@@ -69,7 +77,7 @@ The full list of ideas for further features is in [ROADMAP.md](ROADMAP.md).
 | PipeWire/PulseAudio tools | `parecord`, `aplay` | `pipewire-pulse`, `alsa-utils` |
 | whisper.cpp (`whisper-cli`) | `~/startrek/whisper.cpp/build/bin/whisper-cli` | see below |
 | Whisper model | `~/startrek/whisper.cpp/models/ggml-base.en.bin` | see below |
-| Piper (Python `piper-tts`) | on `PATH`, e.g. `~/.local/bin/piper` | `pip install --user piper-tts` |
+| Piper (Python `piper-tts`) | on `PATH`, e.g. `~/.local/bin/piper` | `uv tool install piper-tts` (or `pip install --user piper-tts`) |
 | Piper voice | `~/startrek/piper/voices/en_US-lessac-medium.onnx` (+ `.onnx.json`) | see below |
 | Kokoro (optional, more natural voice) | `~/.local/share/kokoro-models/` | see below |
 | Ollama ≥ 0.30.9 + a model | `http://localhost:11434` | `ollama pull gemma4:12b` |
@@ -88,7 +96,7 @@ sh ./models/download-ggml-model.sh base.en
 ### Piper voice
 
 ```bash
-python -m piper.download_voices --download-dir ~/startrek/piper/voices en_US-lessac-medium
+~/.local/share/uv/tools/piper-tts/bin/python -m piper.download_voices --download-dir ~/startrek/piper/voices en_US-lessac-medium
 ```
 
 ### Kokoro voices (optional)
@@ -110,7 +118,7 @@ Then set in `config.toml`:
 engine = "kokoro"
 voice = "af_sky"     # af_* American, bf_* British; run `kokoro-tts --help-voices` for all
 speed = 1.0
-kokoro_python = "/home/<you>/.local/share/uv/tools/kokoro-tts/bin/python3"
+kokoro_python = "/home/mikel/.local/share/uv/tools/kokoro-tts/bin/python3"
 ```
 
 The assistant runs a small helper (embedded in the binary, written to the data directory)
@@ -124,7 +132,7 @@ Restart the assistant after editing it.
 
 | Setting | Current value | Meaning |
 |---|---|---|
-| `[llm] model` | `"gemma4:12b"` | Any model pulled in Ollama (see [Choosing a model](#choosing-a-model)) |
+| `[llm] model` | `"gemma4:12b"` (laptop 1), `"gemma4:26b"` (laptop 2) | Any model pulled in Ollama (see [Choosing a model](#choosing-a-model)) |
 | `[llm] think` | `false` (default) | Let reasoning models think before answering. 20–45 s per answer on this hardware |
 | `[tts] engine` | `"kokoro"` | `"piper"` or `"kokoro"` |
 | `[tts] voice` | `"af_sky"` | Kokoro voice name (Piper uses `model_path` instead) |
@@ -139,6 +147,8 @@ files keep working.
 
 ## Choosing a model
 
+### Laptop 1 (i7-11800H, RTX A2000)
+
 Benchmarked on an i7-11800H with a 4 GB RTX A2000 Laptop GPU, using the assistant's
 own prompt and 24 general-knowledge questions:
 
@@ -151,6 +161,19 @@ own prompt and 24 general-knowledge questions:
 `gemma4` needs Ollama 0.30.9 or newer. Older versions fail the pull with
 `412: requires a newer version of Ollama`. A cold model load takes 20–40 s, which is
 why the assistant preloads the model at startup and keeps it loaded for 30 minutes.
+
+### Laptop 2 (Ryzen AI 9 HX 370, Radeon 890M)
+
+Ollama here is 0.30.7, so `gemma4:12b` can't be pulled. `gemma4:26b` was already
+installed and runs fine:
+
+| Model | Placement | Cold answer | Warm answer | Speed |
+|---|---|---|---|---|
+| **`gemma4:26b`**, thinking off | 17 GB, 100% on the iGPU | 9.3 s | 0.9 s | ~21 tokens/s |
+
+These are from two test prompts plus one end-to-end voice test, not the 24-question
+benchmark above. With 86 GB of RAM shared with the iGPU, the memory pressure described
+under [Known gaps](#known-gaps) doesn't apply.
 
 ## Running at login (systemd user service)
 
@@ -167,8 +190,8 @@ Wants=pipewire-pulse.service
 
 [Service]
 Type=simple
-ExecStart=%h/GitSpace/StarTrekComputer/voice-assistant/target/release/voice-assistant
-WorkingDirectory=%h/GitSpace/StarTrekComputer/voice-assistant
+ExecStart=%h/Workspace/GitSpace/StarTrekComputer/voice-assistant/target/release/voice-assistant
+WorkingDirectory=%h/Workspace/GitSpace/StarTrekComputer/voice-assistant
 # piper lives in ~/.local/bin, which isn't on systemd's default PATH
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Restart=on-failure
