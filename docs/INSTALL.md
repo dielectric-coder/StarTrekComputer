@@ -14,7 +14,7 @@ Complete installation guide for setting up the Star Trek Enterprise computer voi
 
 ```bash
 # Download and run the automated installer
-curl -sSL https://raw.githubusercontent.com/oakeley/StarTrekComputer/main/scripts/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/dielectric-coder/StarTrekComputer/main/scripts/install.sh | bash
 ```
 
 ## Manual Installation

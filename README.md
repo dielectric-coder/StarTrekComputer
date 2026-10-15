@@ -63,14 +63,14 @@ Computer: "Referencing previous discussion: Mars distance varies from 54.6 to 40
 ### Automated Installation (Recommended)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/oakeley/StarTrekComputer/main/scripts/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/dielectric-coder/StarTrekComputer/main/scripts/install.sh | bash
 ```
 
 ### Manual Installation
 
 1. **Clone Repository**
    ```bash
-   git clone https://github.com/oakeley/StarTrekComputer.git
+   git clone https://github.com/dielectric-coder/StarTrekComputer.git
    cd StarTrekComputer
    ```
 

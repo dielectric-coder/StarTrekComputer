@@ -1,6 +1,6 @@
 [Unit]
 Description=Star Trek Enterprise Computer Voice Assistant
-Documentation=https://github.com/oakeley/StarTrekComputer
+Documentation=https://github.com/dielectric-coder/StarTrekComputer
 After=network.target sound.target ollama.service pulseaudio.service
 Wants=network.target sound.target ollama.service
 Requires=ollama.service

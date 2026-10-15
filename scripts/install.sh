@@ -2,7 +2,7 @@
 
 # Star Trek Computer Automated Installation Script
 # For Jetson Nano 16GB and compatible ARM64 systems
-# Run with: curl -sSL https://raw.githubusercontent.com/oakeley/StarTrekComputer/main/scripts/install.sh | bash
+# Run with: curl -sSL https://raw.githubusercontent.com/dielectric-coder/StarTrekComputer/main/scripts/install.sh | bash
 
 set -e
 
@@ -464,7 +464,7 @@ main() {
     else
         log_info "Cloning voice assistant code..."
         # This would be replaced with the actual repository
-        # git clone https://github.com/oakeley/StarTrekComputer.git voice-assistant
+        # git clone https://github.com/dielectric-coder/StarTrekComputer.git voice-assistant
         
         # For now, we'll assume the code is already in place
         if [[ ! -d "voice-assistant" ]]; then
