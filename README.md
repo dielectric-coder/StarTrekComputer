@@ -1,5 +1,29 @@
 # 🖖 Star Trek Enterprise Computer Voice Assistant
 
+> **About this fork**
+>
+> This is a fork of [oakeley/StarTrekComputer](https://github.com/oakeley/StarTrekComputer)
+> by Edward ([@oakeley](https://github.com/oakeley)), who created the project. All credit
+> for the original idea, design and code goes to him.
+>
+> The fork was made to get the assistant working on **Arch-based Linux** (Manjaro,
+> CachyOS) as a per-user service with PipeWire audio. Along the way it fixes the build,
+> real microphone input, speech-to-text and text-to-speech, and adds Kokoro voices and
+> voice commands (timers, reminders, status report, volume, captain's log). The original
+> Jetson Nano install path is kept working.
+>
+> 👉 Desktop setup and the full list of changes:
+> [docs/DESKTOP_SETUP.md](docs/DESKTOP_SETUP.md)
+>
+> **Built on:** [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (speech recognition),
+> [Piper](https://github.com/rhasspy/piper) and
+> [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) via
+> [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) (speech synthesis), and
+> [Ollama](https://ollama.com) running Google's [Gemma](https://ai.google.dev/gemma) models.
+> Star Trek is a trademark of CBS Studios / Paramount; this is an unofficial fan project.
+>
+> Released under the [MIT License](LICENSE), like the original.
+
 A voice-activated AI assistant that emulates the iconic Star Trek Enterprise computer, complete with fact-checking capabilities and the distinctive computer voice style from the original series.
 
 > **"Computer. Status report."**
