@@ -90,7 +90,7 @@ make -j4
 bash ./models/download-ggml-model.sh base.en
 
 # Test whisper
-echo "Computer, what is the weather today?" | ./main -m models/ggml-base.en.bin -f -
+echo "Computer, what is the weather today?" | ./build/bin/whisper-cli -m models/ggml-base.en.bin -f -
 ```
 
 ### 5. Install Piper TTS (Text-to-Speech)
@@ -157,7 +157,8 @@ sudo mkdir -p /var/lib/startrek-computer
 sudo chown startrek:audio /var/lib/startrek-computer
 
 # Copy application files
-sudo cp -r $HOME/startrek /opt/
+sudo mkdir -p /opt/startrek
+sudo cp -r $HOME/startrek /opt/startrek/
 sudo chown -R startrek:audio /opt/startrek
 ```
 
@@ -177,7 +178,7 @@ StartLimitBurst=3
 Type=simple
 User=startrek
 Group=audio
-ExecStart=/opt/startrek/voice-assistant/target/release/voice-assistant
+ExecStart=/opt/startrek/startrek/voice-assistant/target/release/voice-assistant
 Restart=always
 RestartSec=10
 KillMode=mixed
@@ -186,7 +187,7 @@ TimeoutStopSec=30
 # Environment variables
 Environment=RUST_LOG=info
 Environment=OLLAMA_HOST=http://localhost:11434
-WorkingDirectory=/opt/startrek
+WorkingDirectory=/opt/startrek/startrek
 
 # Security settings
 NoNewPrivileges=true
@@ -244,7 +245,8 @@ set-default-sink alsa_output.platform-*
 
 ## Configuration
 
-The system will create a default configuration at `~/.voice-assistant/config.toml`. You can customize:
+The system will create a default configuration at `~/startrek/.voice-assistant/config.toml`
+(for the service: `/var/lib/startrek-computer/startrek/.voice-assistant/config.toml`). You can customize:
 
 ### Sample Configuration
 
@@ -258,12 +260,12 @@ output_device = null  # null = system default
 
 [stt]
 engine = "whisper"
-model_path = "/opt/startrek/whisper.cpp/models/ggml-base.en.bin"
+model_path = "/opt/startrek/startrek/whisper.cpp/models/ggml-base.en.bin"
 language = "en"
 
 [tts]
 engine = "piper"
-model_path = "/opt/startrek/piper/voices/en_US-lessac-medium.onnx"
+model_path = "/opt/startrek/startrek/piper/voices/en_US-lessac-medium.onnx"
 voice = "lessac"
 speed = 0.9
 
@@ -275,7 +277,7 @@ temperature = 0.3
 
 [search]
 enabled = true
-search_script = "/opt/startrek/search_tool.py"
+search_script = "/opt/startrek/startrek/search_tool.py"
 max_results = 3
 
 [wake_word]
@@ -307,7 +309,7 @@ sudo journalctl -u startrek-computer -f
 
 ```bash
 # Test STT
-echo "Computer, status report" | /opt/startrek/whisper.cpp/main -m /opt/startrek/whisper.cpp/models/ggml-base.en.bin -f -
+echo "Computer, status report" | /opt/startrek/startrek/whisper.cpp/build/bin/whisper-cli -m /opt/startrek/startrek/whisper.cpp/models/ggml-base.en.bin -f -
 
 # Test LLM
 curl http://localhost:11434/api/generate -d '{
@@ -317,10 +319,10 @@ curl http://localhost:11434/api/generate -d '{
 }'
 
 # Test TTS
-echo "All systems operating normally, Captain." | /opt/startrek/piper/piper/piper --model /opt/startrek/piper/voices/en_US-lessac-medium.onnx --output_file - | aplay
+echo "All systems operating normally, Captain." | /opt/startrek/startrek/piper/piper/piper --model /opt/startrek/startrek/piper/voices/en_US-lessac-medium.onnx --output_file - | aplay
 
 # Test search
-python3 /opt/startrek/search_tool.py "current weather conditions"
+python3 /opt/startrek/startrek/search_tool.py "current weather conditions"
 ```
 
 ## Boot-Time Startup
@@ -392,7 +394,7 @@ sudo systemctl status startrek-computer ollama
 
 ### 3. Health Checks
 
-Create `/opt/startrek/healthcheck.sh`:
+Create `/opt/startrek/startrek/healthcheck.sh`:
 
 ```bash
 #!/bin/bash
@@ -413,8 +415,8 @@ echo
 
 # Check models
 echo "Models:"
-ls -la /opt/startrek/whisper.cpp/models/ggml-*.bin
-ls -la /opt/startrek/piper/voices/*.onnx
+ls -la /opt/startrek/startrek/whisper.cpp/models/ggml-*.bin
+ls -la /opt/startrek/startrek/piper/voices/*.onnx
 echo
 
 # Check logs for errors
@@ -425,7 +427,7 @@ echo
 # Test components
 echo "Component tests:"
 timeout 10 curl -s http://localhost:11434/api/tags > /dev/null && echo "✓ Ollama responding" || echo "✗ Ollama not responding"
-test -f /opt/startrek/search_tool.py && echo "✓ Search tool present" || echo "✗ Search tool missing"
+test -f /opt/startrek/startrek/search_tool.py && echo "✓ Search tool present" || echo "✗ Search tool missing"
 echo
 
 echo "=== Health check complete ==="
@@ -433,15 +435,15 @@ echo "=== Health check complete ==="
 
 ```bash
 # Make executable
-chmod +x /opt/startrek/healthcheck.sh
+chmod +x /opt/startrek/startrek/healthcheck.sh
 
 # Run health check
-sudo -u startrek /opt/startrek/healthcheck.sh
+sudo -u startrek /opt/startrek/startrek/healthcheck.sh
 ```
 
 ## Automatic Updates
 
-Create `/opt/startrek/update.sh`:
+Create `/opt/startrek/startrek/update.sh`:
 
 ```bash
 #!/bin/bash
@@ -454,12 +456,12 @@ echo "=== Star Trek Computer Update ==="
 cp -r /var/lib/startrek-computer /var/lib/startrek-computer.backup.$(date +%Y%m%d_%H%M%S)
 
 # Update models if needed
-cd /opt/startrek/whisper.cpp
+cd /opt/startrek/startrek/whisper.cpp
 git pull
 make -j4
 
 # Update voice assistant
-cd /opt/startrek/voice-assistant
+cd /opt/startrek/startrek/voice-assistant
 git pull
 cargo build --release
 
@@ -470,7 +472,7 @@ echo "Update complete. Check status with: systemctl status startrek-computer"
 ```
 
 ```bash
-chmod +x /opt/startrek/update.sh
+chmod +x /opt/startrek/startrek/update.sh
 ```
 
 ## Troubleshooting
@@ -484,7 +486,7 @@ systemctl status ollama
 systemctl status pulseaudio
 
 # Check permissions
-sudo -u startrek ls -la /opt/startrek/
+sudo -u startrek ls -la /opt/startrek/startrek/
 ```
 
 **No audio input:**
@@ -516,7 +518,7 @@ alsamixer
 
 # Test STT manually
 arecord -f cd -d 5 test.wav
-/opt/startrek/whisper.cpp/main -m /opt/startrek/whisper.cpp/models/ggml-base.en.bin -f test.wav
+/opt/startrek/startrek/whisper.cpp/build/bin/whisper-cli -m /opt/startrek/startrek/whisper.cpp/models/ggml-base.en.bin -f test.wav
 ```
 
 ### Log Analysis
