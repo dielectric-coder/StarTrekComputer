@@ -139,11 +139,55 @@ Restart the assistant after editing it.
 | `[tts] speed` | `1.0` | Speech rate; 1.0 = the voice's natural pace, lower = slower (0.77 suited lessac) |
 | `[tts] piper_binary` | `"piper"` (default) | Piper executable; a bare name is looked up on `PATH` |
 | `[stt] whisper_binary` | `~/startrek/whisper.cpp/build/bin/whisper-cli` (default) | whisper.cpp CLI |
-| `[audio] vad_threshold` | `0.015` (default) | Minimum RMS treated as speech. Lower it if quiet speech is missed, raise it if noise triggers it |
+| `[audio] vad_threshold` | `0.015` (default), `0.006` on laptop 2 | Minimum RMS treated as speech. Lower it if quiet speech is missed, raise it if noise triggers it |
 | `[audio] input_device` | unset (system default) | A source name from `pactl list short sources` |
 
 `piper_binary`, `kokoro_python`, `kokoro_model`, `kokoro_voices`, `whisper_binary`, `vad_threshold` and `think` are optional, so older config
 files keep working.
+
+## If it doesn't react to "Computer"
+
+If `journalctl --user -u startrek-computer -f` shows no `Whisper transcription` lines
+when you speak, your voice is probably below the speech threshold. The assistant only
+treats audio as speech above an RMS of max(`vad_threshold`, 3 × background noise).
+
+1. Check that the right mic is the default and isn't muted:
+
+   ```bash
+   pactl get-default-source
+   pactl list sources | grep -E 'Name:|Mute:|Volume:'
+   ```
+
+2. Measure your speech level. Run this and say "Computer, what time is it?" a few
+   times within 15 seconds:
+
+   ```bash
+   timeout 15 parecord --raw --format=s16le --rate=16000 --channels=1 /tmp/voice.raw
+   python3 - /tmp/voice.raw <<'PY'
+   import sys, array, math
+   a = array.array('h', open(sys.argv[1], 'rb').read())
+   r = sorted(math.sqrt(sum(x*x for x in a[i:i+480]) / 480) / 32768
+              for i in range(0, len(a) - 480, 480))
+   print(f"noise (median) {r[len(r)//2]:.4f}  speech (95th percentile) {r[int(len(r)*.95)]:.4f}")
+   PY
+   ```
+
+   Speech should be comfortably above the threshold, and the threshold above 3 × noise.
+
+3. Raise the mic gain, lower `vad_threshold`, or both, then restart the service.
+
+On laptop 2 the built-in digital mic was at 72%. Speech peaked at about 0.007 RMS
+(the 95th percentile) against the default threshold of 0.015, so nothing was ever
+detected. Room noise was about 0.0014. The fix was:
+
+```bash
+pactl set-source-volume @DEFAULT_SOURCE@ 100%     # about 2.7× louder
+sed -i 's/^vad_threshold = .*/vad_threshold = 0.006/' ~/startrek/.voice-assistant/config.toml
+systemctl --user restart startrek-computer
+```
+
+The mic is muted while the assistant speaks, so wait for it to finish before trying
+again. Repeating yourself during its answer looks like it isn't listening.
 
 ## Choosing a model
 
