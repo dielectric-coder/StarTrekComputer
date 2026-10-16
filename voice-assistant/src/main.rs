@@ -4,9 +4,7 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::{info, error, warn};
 
 mod audio;
-mod config;
 mod llm;
-mod rag;
 mod search;
 mod stt;
 mod tools;
@@ -14,7 +12,10 @@ mod tts;
 mod vad;
 mod wake_word;
 
-use audio::{AudioManager, AudioCommand};
+// config and rag come from the library so rag-manager and the assistant share one copy.
+use voice_assistant::{config, rag};
+
+use audio::AudioManager;
 use config::AssistantConfig;
 use llm::LLMClient;
 use search::{WebSearcher, SearchResults};
@@ -43,7 +44,6 @@ pub enum AssistantEvent {
 }
 
 pub struct VoiceAssistant {
-    config: AssistantConfig,
     audio_manager: Arc<AudioManager>,
     stt: Arc<SpeechToText>,
     tts: Arc<TextToSpeech>,
@@ -75,7 +75,6 @@ impl VoiceAssistant {
         let wake_word = Arc::new(Mutex::new(WakeWordDetector::new(&config).await?));
 
         Ok(Self {
-            config,
             audio_manager,
             stt,
             tts,

@@ -11,12 +11,6 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 use crate::{config::AssistantConfig, vad::VoiceActivityDetector, AssistantCommand};
 
-pub enum AudioCommand {
-    StartCapture,
-    StopCapture,
-    PlayAudio(Vec<f32>),
-}
-
 /// whisper.cpp only accepts 16 kHz mono input, so capture in that format directly.
 const SAMPLE_RATE: usize = 16000;
 const FRAME_MS: usize = 30;
@@ -113,11 +107,6 @@ impl AudioManager {
         Ok(())
     }
 
-    pub async fn play_audio(&self, _audio_data: Vec<f32>) -> Result<()> {
-        info!("Audio playback (simplified - no actual audio playback)");
-        // This would be replaced with actual audio playback using system tools
-        Ok(())
-    }
 }
 
 fn spawn_recorder(device: Option<&str>) -> Result<(Child, ChildStdout)> {

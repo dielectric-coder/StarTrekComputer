@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 pub struct WakeWordDetector {
     wake_word: String,
-    sensitivity: f32,
     stt: Arc<SpeechToText>,
 }
 
@@ -17,7 +16,6 @@ impl WakeWordDetector {
         
         Ok(Self {
             wake_word: "computer".to_string(), // Fixed wake word for Star Trek computer
-            sensitivity: config.wake_word.sensitivity,
             stt,
         })
     }

@@ -6,8 +6,7 @@
 
 use anyhow::Result;
 use clap::{Arg, Command as ClapCommand, ArgMatches};
-use std::collections::HashMap;
-use tracing::{info, Level};
+use tracing::Level;
 use tracing_subscriber;
 
 // We need to include the main crate modules
@@ -141,7 +140,7 @@ async fn show_stats(rag_db: &RAGDatabase) -> Result<()> {
     Ok(())
 }
 
-async fn show_conversations(rag_db: &RAGDatabase, matches: &ArgMatches) -> Result<()> {
+async fn show_conversations(_rag_db: &RAGDatabase, matches: &ArgMatches) -> Result<()> {
     let limit = matches.get_one::<String>("limit")
         .unwrap()
         .parse::<i32>()
@@ -156,7 +155,7 @@ async fn show_conversations(rag_db: &RAGDatabase, matches: &ArgMatches) -> Resul
     Ok(())
 }
 
-async fn show_preferences(rag_db: &RAGDatabase) -> Result<()> {
+async fn show_preferences(_rag_db: &RAGDatabase) -> Result<()> {
     println!("⚙️  User Preferences");
     println!("{}", "=".repeat(50));
     
@@ -166,7 +165,7 @@ async fn show_preferences(rag_db: &RAGDatabase) -> Result<()> {
     Ok(())
 }
 
-async fn show_knowledge(rag_db: &RAGDatabase, matches: &ArgMatches) -> Result<()> {
+async fn show_knowledge(_rag_db: &RAGDatabase, matches: &ArgMatches) -> Result<()> {
     let topic_filter = matches.get_one::<String>("topic");
     
     if let Some(topic) = topic_filter {

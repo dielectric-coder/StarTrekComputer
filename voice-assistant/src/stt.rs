@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::process::Command;
 use tempfile::NamedTempFile;
 use tokio::process::Command as TokioCommand;
 use crate::config::AssistantConfig;
@@ -90,7 +89,7 @@ impl SpeechToText {
         }
     }
 
-    async fn transcribe_vosk(&self, audio_data: &[f32]) -> Result<Option<String>> {
+    async fn transcribe_vosk(&self, _audio_data: &[f32]) -> Result<Option<String>> {
         // TODO: Implement Vosk integration
         Ok(None)
     }

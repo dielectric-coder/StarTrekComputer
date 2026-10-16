@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{sqlite::{SqliteConnectOptions, SqlitePool}, Row};
 use std::collections::HashMap;
-use tracing::{info, debug, warn, error};
+use tracing::{info, debug};
 use uuid::Uuid;
 use crate::config::AssistantConfig;
 
@@ -53,7 +53,6 @@ pub struct RAGContext {
 
 pub struct RAGDatabase {
     pool: SqlitePool,
-    config: AssistantConfig,
     embedding_model: Option<EmbeddingModel>,
 }
 
@@ -104,7 +103,6 @@ impl RAGDatabase {
         
         let rag_db = Self {
             pool,
-            config: config.clone(),
             embedding_model: Some(EmbeddingModel::new()?),
         };
         
@@ -207,7 +205,7 @@ impl RAGDatabase {
                assistant_response.chars().take(50).collect::<String>());
 
         // Learn from this conversation
-        self.learn_user_preferences(user_input, assistant_response).await?;
+        self.learn_user_preferences(user_input).await?;
         if learn_knowledge {
             self.extract_knowledge(user_input, assistant_response).await?;
         }
@@ -215,7 +213,7 @@ impl RAGDatabase {
         Ok(id)
     }
 
-    async fn learn_user_preferences(&self, user_input: &str, assistant_response: &str) -> Result<()> {
+    async fn learn_user_preferences(&self, user_input: &str) -> Result<()> {
         // Analyze user input patterns to learn preferences
         
         // Response length preference

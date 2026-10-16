@@ -7,7 +7,6 @@ use crate::tools::ToolBox;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{info, error, debug};
-use uuid::Uuid;
 
 /// Tool-calling rounds allowed per request before giving up.
 const MAX_TOOL_ROUNDS: usize = 3;
@@ -279,16 +278,5 @@ impl LLMClient {
         }
         
         adapted_prompt
-    }
-    
-    pub async fn rate_last_response(&self, rating: i32) -> Result<()> {
-        // This would need to track the last conversation ID
-        // For now, this is a placeholder for the rating functionality
-        info!("Response rated: {}/5", rating);
-        Ok(())
-    }
-    
-    pub async fn get_memory_stats(&self) -> Result<std::collections::HashMap<String, i64>> {
-        self.rag_db.get_statistics().await
     }
 }
