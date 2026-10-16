@@ -4,7 +4,8 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
-use tokio::process::Command;
+use std::time::Duration;
+use tokio::process::{Child, ChildStdout, Command};
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
@@ -27,6 +28,7 @@ const END_SILENCE_FRAMES: usize = 800 / FRAME_MS;
 /// Utterances with less speech than this are treated as noise (clicks, bumps).
 const MIN_SPEECH_FRAMES: usize = 250 / FRAME_MS;
 const MAX_UTTERANCE_FRAMES: usize = 15_000 / FRAME_MS;
+const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 
 pub struct AudioManager {
     config: AssistantConfig,
@@ -53,36 +55,39 @@ impl AudioManager {
             return Ok(());
         }
 
-        let mut cmd = Command::new("parecord");
-        cmd.arg("--raw")
-            .arg(format!("--rate={}", SAMPLE_RATE))
-            .arg("--channels=1")
-            .arg("--format=s16le")
-            .arg("--latency-msec=30");
-        if let Some(device) = &self.config.audio.input_device {
-            cmd.arg(format!("--device={}", device));
-        }
-        let mut child = cmd
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .kill_on_drop(true)
-            .spawn()
-            .context("failed to start `parecord` for microphone capture (is pipewire-pulse or pulseaudio installed?)")?;
-
-        let stdout = child.stdout.take().context("parecord has no stdout")?;
-        let vad = VoiceActivityDetector::new(&self.config)?;
+        let device = self.config.audio.input_device.clone();
+        let (child, stdout) = spawn_recorder(device.as_deref())?;
+        let mut vad = VoiceActivityDetector::new(&self.config)?;
         let paused = self.paused.clone();
 
         info!(
             "Audio capture started from {}",
-            self.config.audio.input_device.as_deref().unwrap_or("default input device")
+            device.as_deref().unwrap_or("default input device")
         );
 
         *capture_task = Some(tokio::spawn(async move {
             // Owning the child here means aborting the task kills parecord.
-            let _child = child;
-            if let Err(e) = capture_loop(stdout, vad, paused, command_tx).await {
-                error!("Audio capture stopped: {}", e);
+            let mut child = child;
+            let mut stdout = stdout;
+            loop {
+                match capture_loop(&mut stdout, &mut vad, &paused, &command_tx).await {
+                    Ok(()) => return, // assistant is shutting down
+                    // At login the session can start us before the microphone node exists,
+                    // and devices come and go (USB, Bluetooth), so reconnect instead of going deaf.
+                    Err(e) => warn!("Microphone stream lost ({}), reconnecting", e),
+                }
+                let _ = child.kill().await;
+                loop {
+                    tokio::time::sleep(RECONNECT_DELAY).await;
+                    match spawn_recorder(device.as_deref()) {
+                        Ok((c, s)) => {
+                            child = c;
+                            stdout = s;
+                            break;
+                        }
+                        Err(e) => error!("Could not restart microphone capture: {:#}", e),
+                    }
+                }
             }
         }));
 
@@ -115,12 +120,32 @@ impl AudioManager {
     }
 }
 
+fn spawn_recorder(device: Option<&str>) -> Result<(Child, ChildStdout)> {
+    let mut cmd = Command::new("parecord");
+    cmd.arg("--raw")
+        .arg(format!("--rate={}", SAMPLE_RATE))
+        .arg("--channels=1")
+        .arg("--format=s16le")
+        .arg("--latency-msec=30");
+    if let Some(device) = device {
+        cmd.arg(format!("--device={}", device));
+    }
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .context("failed to start `parecord` for microphone capture (is pipewire-pulse or pulseaudio installed?)")?;
+    let stdout = child.stdout.take().context("parecord has no stdout")?;
+    Ok((child, stdout))
+}
+
 /// Read raw PCM from the recorder and send each complete utterance as one chunk.
 async fn capture_loop(
-    mut stdout: tokio::process::ChildStdout,
-    mut vad: VoiceActivityDetector,
-    paused: Arc<AtomicBool>,
-    command_tx: mpsc::UnboundedSender<AssistantCommand>,
+    stdout: &mut ChildStdout,
+    vad: &mut VoiceActivityDetector,
+    paused: &AtomicBool,
+    command_tx: &mpsc::UnboundedSender<AssistantCommand>,
 ) -> Result<()> {
     let mut bytes = vec![0u8; FRAME_SAMPLES * 2];
     let mut pre_roll: VecDeque<Vec<f32>> = VecDeque::with_capacity(PRE_ROLL_FRAMES);
