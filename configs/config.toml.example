@@ -54,3 +54,4 @@ learning_rate = 0.1               # How quickly preferences adapt (0.0-1.0)
 # General application settings
 log_level = "info"                              # Logging level (error, warn, info, debug, trace)
 data_dir = "/var/lib/startrek-computer"         # Data directory for logs and cache
+cancel_window_secs = 3.0                        # Time to say "negative" after "You have requested: ..."

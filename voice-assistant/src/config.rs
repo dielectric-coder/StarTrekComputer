@@ -154,6 +154,13 @@ pub struct RagConfig {
 pub struct GeneralConfig {
     pub log_level: String,
     pub data_dir: PathBuf,
+    /// Seconds after "You have requested: ..." to wait for "negative" before acting
+    #[serde(default = "default_cancel_window_secs")]
+    pub cancel_window_secs: f32,
+}
+
+fn default_cancel_window_secs() -> f32 {
+    3.0
 }
 
 impl Default for AssistantConfig {
@@ -216,6 +223,7 @@ impl Default for AssistantConfig {
                 log_level: "info".to_string(),
                 // Always under home: /opt is read-only for the system service
                 data_dir: home_dir.join("startrek/.voice-assistant"),
+                cancel_window_secs: default_cancel_window_secs(),
             },
         }
     }

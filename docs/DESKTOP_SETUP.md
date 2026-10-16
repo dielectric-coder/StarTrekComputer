@@ -31,11 +31,16 @@ Stop with Ctrl-C.
 - **One breath:** "Computer, what is the speed of light?" It confirms the request
   ("You have requested: …"), says "Processing…", and answers.
 - **Two steps:** "Computer" … *chirp* … then ask your question.
+- **Changed your mind?** After "You have requested: …" it waits 3 seconds before acting.
+  Say "negative" to call it off. While it's thinking, "stop" does the same. Either way
+  it answers "Request canceled." Both words work in both phases, as do "cancel",
+  "abort", "belay that" and "never mind". The word has to be said on its own.
 
 After answering it returns to waiting for the wake word.
 
 - Pause after speaking. About 0.8 s of silence ends an utterance.
-- The microphone is muted while the assistant talks, so let it finish first.
+- The microphone is muted while the assistant talks, so let it finish first. That also
+  means "stop" can't cut off an answer that is already being spoken.
 - Transcription takes a second or two after you stop talking.
 - Requests containing "search", "look up" or "find information" try the web search
   script (`~/startrek/search_tool.py`). If it isn't installed they fall back to the LLM.

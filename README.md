@@ -32,7 +32,7 @@ A voice-activated AI assistant that emulates the iconic Star Trek Enterprise com
 
 - 🎯 **Wake Word Activation**: Say "Computer" to activate (just like in Star Trek!)
 - 🧠 **Enterprise AI Personality**: Responds in the clipped, precise style of the ship's computer
-- 🗣️ **Voice Confirmation**: Echoes back your request before processing
+- 🗣️ **Voice Confirmation**: Echoes back your request before processing; say "negative" (or "stop" while it's thinking) to cancel
 - 🔍 **Fact-Checking Integration**: Searches Bing and verifies information against trusted sources
 - 🔊 **Authentic TTS**: Computer-like voice synthesis optimized for Star Trek responses
 - 🤖 **RAG Learning System**: Remembers conversations and adapts to user preferences

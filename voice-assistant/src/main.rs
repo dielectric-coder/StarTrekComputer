@@ -1,7 +1,8 @@
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
-use tracing::{info, error, warn};
+use std::time::Duration;
+use tokio::sync::{mpsc, watch, Mutex};
+use tracing::{debug, info, error, warn};
 
 mod audio;
 mod llm;
@@ -57,6 +58,9 @@ pub struct VoiceAssistant {
     event_rx: Arc<Mutex<mpsc::UnboundedReceiver<AssistantEvent>>>,
     is_listening: Arc<Mutex<bool>>,
     conversation_context: Arc<Mutex<Vec<String>>>,
+    /// Set while a request is being confirmed or processed; sending `true` cancels it.
+    active_request: Mutex<Option<watch::Sender<bool>>>,
+    cancel_window: Duration,
 }
 
 impl VoiceAssistant {
@@ -73,6 +77,7 @@ impl VoiceAssistant {
         let llm = Arc::new(LLMClient::new(&config, tools.clone()).await?);
         let searcher = Arc::new(WebSearcher::new(&config));
         let wake_word = Arc::new(Mutex::new(WakeWordDetector::new(&config).await?));
+        let cancel_window = Duration::from_secs_f32(config.general.cancel_window_secs.max(0.0));
 
         Ok(Self {
             audio_manager,
@@ -88,10 +93,12 @@ impl VoiceAssistant {
             event_rx: Arc::new(Mutex::new(event_rx)),
             is_listening: Arc::new(Mutex::new(false)),
             conversation_context: Arc::new(Mutex::new(Vec::new())),
+            active_request: Mutex::new(None),
+            cancel_window,
         })
     }
 
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(self: Arc<Self>) -> Result<()> {
         info!("Starting Voice Assistant...");
 
         // Start audio capture
@@ -106,7 +113,7 @@ impl VoiceAssistant {
         Ok(())
     }
 
-    async fn event_loop(&self) -> Result<()> {
+    async fn event_loop(self: &Arc<Self>) -> Result<()> {
         let mut command_rx = self.command_rx.lock().await;
         let mut event_rx = self.event_rx.lock().await;
 
@@ -151,7 +158,19 @@ impl VoiceAssistant {
             }
             
             AssistantCommand::ProcessAudio(audio_data) => {
-                if self.tools.is_logging().await {
+                if self.active_request.lock().await.is_some() {
+                    // A request is running: the only thing listened for is a cancel command
+                    if let Some(text) = self.stt.transcribe(&audio_data).await? {
+                        if is_cancel_command(&text) {
+                            info!("Cancel command heard: {}", text);
+                            if let Some(cancel) = self.active_request.lock().await.take() {
+                                let _ = cancel.send(true);
+                            }
+                        } else {
+                            debug!("Ignoring speech while a request is running: {}", text);
+                        }
+                    }
+                } else if self.tools.is_logging().await {
                     // Captain's log dictation: everything goes into the log until "end log"
                     if let Some(text) = self.stt.transcribe(&audio_data).await? {
                         if let Some(speech) = self.tools.log_dictation(&text).await? {
@@ -190,7 +209,7 @@ impl VoiceAssistant {
         Ok(())
     }
 
-    async fn handle_event(&self, event: AssistantEvent) -> Result<()> {
+    async fn handle_event(self: &Arc<Self>, event: AssistantEvent) -> Result<()> {
         match event {
             AssistantEvent::WakeWordDetected => {
                 info!("Wake word detected!");
@@ -199,7 +218,17 @@ impl VoiceAssistant {
             
             AssistantEvent::SpeechDetected(text) => {
                 info!("Speech detected: {}", text);
-                self.process_user_input(text).await?;
+                // Run the request on its own task so the event loop keeps listening for
+                // "negative" or "stop" while it is confirmed and processed.
+                let (cancel_tx, cancel_rx) = watch::channel(false);
+                *self.active_request.lock().await = Some(cancel_tx);
+                let this = self.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = this.process_user_input(text, cancel_rx).await {
+                        error!("Error processing request: {}", e);
+                    }
+                    *this.active_request.lock().await = None;
+                });
             }
             
             AssistantEvent::LLMResponse(response) => {
@@ -237,7 +266,7 @@ impl VoiceAssistant {
         Ok(())
     }
 
-    async fn process_user_input(&self, input: String) -> Result<()> {
+    async fn process_user_input(&self, input: String, mut cancel: watch::Receiver<bool>) -> Result<()> {
         // Strip the wake word "computer" from the beginning of the input
         let cleaned_input = self.strip_wake_word(&input);
         let input_lower = cleaned_input.to_lowercase();
@@ -245,19 +274,43 @@ impl VoiceAssistant {
         // Voice confirmation: echo back what was heard
         let confirmation = format!("You have requested: {}", cleaned_input);
         self.speak(&confirmation).await?;
-        
-        // Processing notification
-        self.speak("Processing...").await?;
 
-        // Check if it's a search request
-        if input_lower.contains("search") || input_lower.contains("look up") || 
-           input_lower.contains("find information") {
-            self.handle_search_request(cleaned_input).await?;
-        } else {
-            // Process with local LLM
-            self.handle_llm_request(cleaned_input).await?;
+        // Give the user a moment to say "negative" before anything happens.
+        // Speech is never interrupted (that would leave the mic muted or TTS half-way),
+        // so cancellation is only awaited between utterances and while thinking.
+        let canceled = tokio::select! {
+            _ = tokio::time::sleep(self.cancel_window) => false,
+            _ = wait_for_cancel(&mut cancel) => true,
+        };
+        if canceled || *cancel.borrow() {
+            return self.cancel_request().await;
         }
 
+        // Processing notification
+        self.speak("Processing...").await?;
+        if *cancel.borrow() {
+            return self.cancel_request().await;
+        }
+
+        let is_search = input_lower.contains("search") || input_lower.contains("look up") ||
+            input_lower.contains("find information");
+        tokio::select! {
+            result = async {
+                if is_search {
+                    self.handle_search_request(cleaned_input).await
+                } else {
+                    // Process with local LLM
+                    self.handle_llm_request(cleaned_input).await
+                }
+            } => result,
+            _ = wait_for_cancel(&mut cancel) => self.cancel_request().await,
+        }
+    }
+
+    async fn cancel_request(&self) -> Result<()> {
+        info!("Request canceled");
+        self.speak("Request canceled.").await?;
+        self.command_tx.send(AssistantCommand::StopListening)?;
         Ok(())
     }
 
@@ -284,19 +337,21 @@ impl VoiceAssistant {
     async fn handle_llm_request(&self, input: String) -> Result<()> {
         info!("Processing LLM request: {}", input);
         
-        // Add context from conversation history
+        // Add context from conversation history. The exchange is only recorded once
+        // answered, so a canceled request doesn't linger in the context.
         let mut context = self.conversation_context.lock().await;
-        context.push(format!("User: {}", input));
-        
+
         // Keep only last 10 exchanges to manage memory
         if context.len() > 20 {
             context.drain(0..10);
         }
-        
-        let context_str = context.join("\n");
-        
+
+        let user_line = format!("User: {}", input);
+        let context_str = context.iter().chain(std::iter::once(&user_line)).cloned().collect::<Vec<_>>().join("\n");
+
         match self.llm.generate_response(&input, Some(&context_str)).await {
             Ok(response) => {
+                context.push(user_line);
                 context.push(format!("Assistant: {}", response));
                 self.event_tx.send(AssistantEvent::LLMResponse(response))?;
             }
@@ -385,6 +440,27 @@ impl VoiceAssistant {
     }
 }
 
+/// Resolves once the request is canceled; never resolves if it can't be anymore.
+async fn wait_for_cancel(cancel: &mut watch::Receiver<bool>) {
+    if cancel.wait_for(|canceled| *canceled).await.is_err() {
+        std::future::pending::<()>().await;
+    }
+}
+
+/// "Negative", "stop" and friends, spoken on their own (optionally after "computer").
+fn is_cancel_command(text: &str) -> bool {
+    let words: Vec<String> = text
+        .split_whitespace()
+        .map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let words: Vec<&str> = words.iter().map(String::as_str).skip_while(|w| *w == "computer").collect();
+    matches!(
+        words.as_slice(),
+        ["negative"] | ["stop"] | ["cancel"] | ["abort"] | ["belay", "that"] | ["never", "mind"] | ["nevermind"]
+    )
+}
+
 /// Strip markdown the LLM sometimes produces, which TTS would read out or stumble over.
 fn clean_for_speech(text: &str) -> String {
     let mut sentences = Vec::new();
@@ -417,7 +493,7 @@ async fn main() -> Result<()> {
     let config = AssistantConfig::load().await?;
     
     // Create and run the assistant
-    let assistant = VoiceAssistant::new(config).await?;
+    let assistant = Arc::new(VoiceAssistant::new(config).await?);
     
     // Set up signal handlers for graceful shutdown
     let command_tx = assistant.command_tx.clone();
@@ -435,4 +511,23 @@ async fn main() -> Result<()> {
 
     info!("Voice Assistant stopped.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_cancel_command;
+
+    #[test]
+    fn cancel_words_on_their_own() {
+        for text in ["Negative.", "Stop!", "computer, stop", "Cancel", "Belay that.", "Never mind", "Abort."] {
+            assert!(is_cancel_command(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn cancel_words_inside_a_request_are_not_commands() {
+        for text in ["Stop the tea timer", "What is a negative number?", "", "Computer"] {
+            assert!(!is_cancel_command(text), "{text}");
+        }
+    }
 }
