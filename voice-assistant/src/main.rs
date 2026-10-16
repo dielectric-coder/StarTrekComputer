@@ -146,9 +146,19 @@ impl VoiceAssistant {
                 info!("Starting to listen for voice commands");
                 *self.is_listening.lock().await = true;
                 
-                self.audio_manager.pause_capture();
-                let result = self.tts.play_listening_sound().await;
-                self.audio_manager.resume_capture();
+                // People often start their request before the chirp finishes, so hold the
+                // microphone rather than muting it. A spoken "I'm listening" is muted instead.
+                let result = if self.tts.listening_sound_is_speech() {
+                    self.audio_manager.pause_capture();
+                    let result = self.tts.play_listening_sound().await;
+                    self.audio_manager.resume_capture();
+                    result
+                } else {
+                    self.audio_manager.hold_capture();
+                    let result = self.tts.play_listening_sound().await;
+                    self.audio_manager.release_capture();
+                    result
+                };
                 result?;
             }
             

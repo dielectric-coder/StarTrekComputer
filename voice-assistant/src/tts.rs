@@ -72,6 +72,11 @@ impl TextToSpeech {
         }
     }
 
+    /// Whether the listening sound is spoken words, which mustn't end up in the transcription.
+    pub fn listening_sound_is_speech(&self) -> bool {
+        self.config.tts.listening_sound == "voice"
+    }
+
     pub async fn speak(&self, text: &str) -> Result<()> {
         match self.config.tts.engine.as_str() {
             "piper" => self.speak_piper(text).await,

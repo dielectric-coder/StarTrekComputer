@@ -6,10 +6,19 @@ use crate::rag::{RAGDatabase, RAGContext};
 use crate::tools::ToolBox;
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tracing::{info, error, debug};
+use tracing::{info, error, debug, warn};
 
 /// Tool-calling rounds allowed per request before giving up.
 const MAX_TOOL_ROUNDS: usize = 3;
+
+/// Said instead of a confirmation the model made up without calling a tool.
+const NO_ACTION_TAKEN: &str = "Unable to comply. No action was taken.";
+
+/// Sent back when the model claims an action it didn't perform, giving it one chance to do it.
+const UNPERFORMED_ACTION_NUDGE: &str = "(System note: you did not call any tool, so nothing was \
+    set, cancelled or changed. If the request was for a timer, reminder, alarm, volume or the \
+    captain's log, call the matching tool now. Otherwise answer without claiming that anything \
+    was done.)";
 
 #[derive(Debug, Serialize)]
 struct OllamaRequest {
@@ -140,8 +149,10 @@ impl LLMClient {
         ));
         system_prompt.push_str(
             " Use the provided tools when the user asks for a timer, reminder, volume change, \
-             system status or the captain's log. Your replies are spoken aloud: plain sentences only, \
-             no markdown, lists or symbols.",
+             system status or the captain's log. Only a tool call can set, cancel or change anything: \
+             never say a timer, reminder, alarm, volume or log was set, cancelled or changed unless a \
+             tool did it in this turn, even if earlier answers in the conversation say so. \
+             Your replies are spoken aloud: plain sentences only, no markdown, lists or symbols.",
         );
 
         // Add user preference adaptations
@@ -181,10 +192,27 @@ impl LLMClient {
 
         let mut response_text = None;
         let mut used_tools = false;
-        for _ in 0..MAX_TOOL_ROUNDS {
+        let mut nudged = false;
+        // One extra round for the nudge below
+        for _ in 0..=MAX_TOOL_ROUNDS {
             let message = self.chat(&messages).await?;
             if message.tool_calls.is_empty() {
-                response_text = Some(message.content.trim().to_string());
+                let text = message.content.trim().to_string();
+                // The model sometimes imitates an earlier tool confirmation instead of calling
+                // the tool, e.g. "Reminder cancelled." while the reminder is still there.
+                if !used_tools && claims_action(&text) {
+                    if !nudged {
+                        warn!("LLM claimed an action without a tool call, asking again: {}", text);
+                        nudged = true;
+                        messages.push(json!({"role": "assistant", "content": text}));
+                        messages.push(json!({"role": "user", "content": UNPERFORMED_ACTION_NUDGE}));
+                        continue;
+                    }
+                    warn!("LLM claimed an action without a tool call again: {}", text);
+                    response_text = Some(NO_ACTION_TAKEN.to_string());
+                    break;
+                }
+                response_text = Some(text);
                 break;
             }
 
@@ -215,7 +243,7 @@ impl LLMClient {
             prompt,
             &response_text,
             Some(&rag_context.context_summary),
-            !used_tools,
+            !used_tools && !nudged,
         ).await?;
         debug!("Stored conversation with ID: {}", conversation_id);
 
@@ -278,5 +306,57 @@ impl LLMClient {
         }
         
         adapted_prompt
+    }
+}
+
+/// Whether a reply reads like the confirmation of an action (what the tools say when they
+/// run), which is a lie if no tool was called. Kept to timer, reminder, volume and log
+/// wording so ordinary answers ("the series was cancelled in 1969") pass.
+fn claims_action(text: &str) -> bool {
+    static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let verbs = r"(set|cancell?ed|deleted|removed|cleared|scheduled|created|added|stopped)";
+    let things = r"(timers?|reminders?|alarms?)";
+    PATTERN
+        .get_or_init(|| {
+            regex::Regex::new(&format!(
+                r"(?i)\b{things}\s+((has|have)\s+been\s+|(is|are|was|were)\s+(now\s+)?)?{verbs}\b|\b{verbs}\s+((the|a|an|all|your|both)\s+)?(\w+\s+)?{things}\b|^\W*(affirmative\W*)?(\d+|all)\s+cancell?ed\b|\bvolume\s+(\d+\s+percent|set|changed|adjusted|increased|decreased|muted)\b|\blog entry recorded\b|\bstardate\b.*\brecording\b"
+            ))
+            .unwrap()
+        })
+        .is_match(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::claims_action;
+
+    #[test]
+    fn made_up_confirmations_are_caught() {
+        for text in [
+            "Reminder cancelled. 10:00.",
+            "Timer set for 10 minutes: tea.",
+            "Affirmative. Alarm set for 11:00.",
+            "3 cancelled.",
+            "Volume 40 percent.",
+            "I have cancelled the alarm.",
+            "Log entry recorded, 12 words.",
+            "Captain's log, stardate 2026.289. Recording.",
+        ] {
+            assert!(claims_action(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn ordinary_answers_pass() {
+        for text in [
+            "The original series was cancelled in 1969.",
+            "The speed of light is 299,792 kilometres per second.",
+            "Negative. Insufficient data.",
+            "The volume of a sphere is four thirds pi r cubed.",
+            "An alarm clock is a clock that sounds at a set time.",
+            "The first recording of the theme dates from 1966.",
+        ] {
+            assert!(!claims_action(text), "{text}");
+        }
     }
 }

@@ -27,7 +27,17 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 pub struct AudioManager {
     config: AssistantConfig,
     capture_task: Mutex<Option<JoinHandle<()>>>,
-    paused: Arc<AtomicBool>,
+    gate: Arc<Gate>,
+}
+
+/// What the capture loop does with the microphone while the assistant makes sound.
+#[derive(Default)]
+struct Gate {
+    /// Discard input and drop any half-heard utterance (used while speaking).
+    paused: AtomicBool,
+    /// Keep recording but let nothing start or end an utterance (used for the
+    /// short wake chirp, so words spoken over it aren't lost).
+    held: AtomicBool,
 }
 
 impl AudioManager {
@@ -37,7 +47,7 @@ impl AudioManager {
         Ok(Self {
             config: config.clone(),
             capture_task: Mutex::new(None),
-            paused: Arc::new(AtomicBool::new(false)),
+            gate: Arc::new(Gate::default()),
         })
     }
 
@@ -52,7 +62,7 @@ impl AudioManager {
         let device = self.config.audio.input_device.clone();
         let (child, stdout) = spawn_recorder(device.as_deref())?;
         let mut vad = VoiceActivityDetector::new(&self.config)?;
-        let paused = self.paused.clone();
+        let gate = self.gate.clone();
 
         info!(
             "Audio capture started from {}",
@@ -64,7 +74,7 @@ impl AudioManager {
             let mut child = child;
             let mut stdout = stdout;
             loop {
-                match capture_loop(&mut stdout, &mut vad, &paused, &command_tx).await {
+                match capture_loop(&mut stdout, &mut vad, &gate, &command_tx).await {
                     Ok(()) => return, // assistant is shutting down
                     // At login the session can start us before the microphone node exists,
                     // and devices come and go (USB, Bluetooth), so reconnect instead of going deaf.
@@ -90,11 +100,20 @@ impl AudioManager {
 
     /// Ignore microphone input (e.g. while the assistant is speaking).
     pub fn pause_capture(&self) {
-        self.paused.store(true, Ordering::SeqCst);
+        self.gate.paused.store(true, Ordering::SeqCst);
     }
 
     pub fn resume_capture(&self) {
-        self.paused.store(false, Ordering::SeqCst);
+        self.gate.paused.store(false, Ordering::SeqCst);
+    }
+
+    /// Keep listening through a short sound without letting it cut an utterance short.
+    pub fn hold_capture(&self) {
+        self.gate.held.store(true, Ordering::SeqCst);
+    }
+
+    pub fn release_capture(&self) {
+        self.gate.held.store(false, Ordering::SeqCst);
     }
 
     pub async fn stop(&self) -> Result<()> {
@@ -133,7 +152,7 @@ fn spawn_recorder(device: Option<&str>) -> Result<(Child, ChildStdout)> {
 async fn capture_loop(
     stdout: &mut ChildStdout,
     vad: &mut VoiceActivityDetector,
-    paused: &AtomicBool,
+    gate: &Gate,
     command_tx: &mpsc::UnboundedSender<AssistantCommand>,
 ) -> Result<()> {
     let mut bytes = vec![0u8; FRAME_SAMPLES * 2];
@@ -163,10 +182,24 @@ async fn capture_loop(
             );
         }
 
-        if paused.load(Ordering::SeqCst) {
+        if gate.paused.load(Ordering::SeqCst) {
             pre_roll.clear();
             utterance.clear();
             in_utterance = false;
+            continue;
+        }
+
+        if gate.held.load(Ordering::SeqCst) {
+            // The chirp would fool the detector (and its noise floor), so just keep the audio:
+            // an utterance in progress carries on, otherwise it rolls through the pre-roll.
+            if in_utterance {
+                utterance.extend_from_slice(&frame);
+            } else {
+                if pre_roll.len() == PRE_ROLL_FRAMES {
+                    pre_roll.pop_front();
+                }
+                pre_roll.push_back(frame);
+            }
             continue;
         }
 
