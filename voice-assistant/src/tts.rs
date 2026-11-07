@@ -132,11 +132,15 @@ impl TextToSpeech {
             *kokoro = Some(start_kokoro(&self.config).await?);
         }
 
+        let voice = match crate::language::current() {
+            crate::language::Lang::Fr => &self.config.tts.french_voice,
+            crate::language::Lang::En => &self.config.tts.voice,
+        };
         let request = serde_json::json!({
             "text": text,
-            "voice": self.config.tts.voice,
+            "voice": voice,
             "speed": self.config.tts.speed.clamp(0.5, 2.0),
-            "lang": kokoro_language(&self.config.tts.voice),
+            "lang": kokoro_language(voice),
         });
         let result = match kokoro.as_mut() {
             Some(process) => process.synthesize(&request).await,
@@ -232,8 +236,9 @@ fn kokoro_language(voice: &str) -> &'static str {
     match voice.chars().next() {
         Some('b') => "en-gb",
         Some('a') => "en-us",
+        Some('f') => "fr-fr",
         _ => {
-            warn!("Voice {} is not English; using en-us pronunciation", voice);
+            warn!("Voice {} is neither English nor French; using en-us pronunciation", voice);
             "en-us"
         }
     }

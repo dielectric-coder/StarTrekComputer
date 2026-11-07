@@ -28,9 +28,13 @@ const MAX_CATALOGUE_CHARS: usize = 3000;
 
 /// Entity kinds that never hold a reading worth speaking.
 const IGNORED_DOMAINS: &[&str] = &[
-    "automation", "button", "conversation", "event", "image", "input_button", "scene",
+    "automation", "button", "conversation", "event", "image", "input_button",
     "script", "stt", "tag", "tts", "update", "wake_word", "zone",
 ];
+
+/// Entity kinds home_control may change. Locks, garage doors, alarms and the like are left
+/// out on purpose: opening the house by voice (or by a misheard sentence) is too risky.
+const CONTROLLABLE_DOMAINS: &[&str] = &["light", "switch", "fan", "input_boolean", "scene", "climate"];
 
 /// Words in a question that say nothing about which entity is meant.
 const STOP_WORDS: &[&str] = &[
@@ -38,6 +42,7 @@ const STOP_WORDS: &[&str] = &[
     "is", "it", "me", "much", "my", "now", "of", "on", "please", "reading", "right", "say",
     "show", "state", "status", "tell", "the", "there", "to", "value", "what", "whats", "which",
     "from", "sensor", "network", "data", "level", "have", "you", "access", "get", "do",
+    "turn", "switch", "set", "put", "off", "activate", "deactivate", "toggle", "please",
 ];
 
 /// Different words people and integrations use for the same thing.
@@ -73,6 +78,18 @@ impl EntityState {
             .unwrap_or_else(|| self.entity_id.split('.').nth(1).unwrap_or("").replace('_', " "))
     }
 
+    /// How to name it when speaking: an alias in the current language, else any alias, else its full name.
+    fn spoken_name(&self, aliases: &HashMap<String, Vec<String>>) -> String {
+        let lang = crate::language::current();
+        let own = aliases.get(&self.entity_id).map(Vec::as_slice).unwrap_or_default();
+        // An alias in the other language still says more than a bare device name like "Lumière"
+        own.iter()
+            .find(|alias| crate::language::alias_language(alias) == lang)
+            .or_else(|| own.first())
+            .cloned()
+            .unwrap_or_else(|| self.name())
+    }
+
     /// The reading as it should be spoken, e.g. "21.5 degrees Celsius" or "open".
     fn describe(&self) -> String {
         let state = self.state.as_str();
@@ -106,6 +123,7 @@ impl EntityState {
                 text
             }
             _ if class == "timestamp" => speak_time(state),
+            "scene" => format!("last activated {}", speak_time(state)),
             _ => {
                 let unit = self.attributes["unit_of_measurement"].as_str().unwrap_or("");
                 let value = state.parse::<f64>().map(round_reading).unwrap_or_else(|_| state.replace('_', " "));
@@ -239,6 +257,13 @@ fn same_word(a: &str, b: &str) -> bool {
 /// The entities a spoken question is most likely about, best first.
 /// `aliases` holds the alternative names given in Home Assistant, by entity id.
 pub fn best_matches<'a>(query: &str, states: &'a [EntityState], aliases: &HashMap<String, Vec<String>>) -> Vec<&'a EntityState> {
+    let mut matches = all_matches(query, states, aliases);
+    matches.truncate(MAX_MATCHES);
+    matches
+}
+
+/// Every entity tied for the best match, best first.
+fn all_matches<'a>(query: &str, states: &'a [EntityState], aliases: &HashMap<String, Vec<String>>) -> Vec<&'a EntityState> {
     let spoken = words(&heard_right(query)).join(" ");
     let wanted: Vec<String> = words(&heard_right(query)).into_iter().filter(|w| !STOP_WORDS.contains(&w.as_str())).collect();
     if wanted.is_empty() {
@@ -295,7 +320,7 @@ pub fn best_matches<'a>(query: &str, states: &'a [EntityState], aliases: &HashMa
     }
     // Among equally good matches, readings first, then the most specific (shortest) names
     scored.sort_by_key(|(_, len, s)| (!matches!(s.domain(), "sensor" | "binary_sensor" | "climate" | "weather"), *len));
-    scored.into_iter().take(MAX_MATCHES).map(|(_, _, s)| s).collect()
+    scored.into_iter().map(|(_, _, s)| s).collect()
 }
 
 pub struct HomeAssistant {
@@ -306,7 +331,8 @@ pub struct HomeAssistant {
     preferred: AtomicUsize,
     exposed: tokio::sync::Mutex<Option<(Instant, Arc<Exposed>)>>,
     /// Names of the exposed entities, for the LLM's tool description.
-    catalogue: std::sync::Mutex<String>,
+    /// One per language: English, French.
+    catalogue: std::sync::Mutex<(String, String)>,
 }
 
 /// What the user chose to show voice assistants in Home Assistant.
@@ -322,7 +348,7 @@ impl Exposed {
     /// Exposed entities grouped by device, e.g. "Station Météo: Dewpoint (Point de rosée),
     /// Wind Speed; Table de chevet Michel: Relais Sonoff B R2". `states` gives the full
     /// names, whose start is the device name; short names alone are often ambiguous.
-    fn catalogue(&self, states: &[EntityState]) -> String {
+    fn catalogue(&self, states: &[EntityState], lang: crate::language::Lang) -> String {
         let mut devices: std::collections::BTreeMap<String, Vec<String>> = Default::default();
         for state in states {
             let Some(short) = self.names.get(&state.entity_id) else { continue };
@@ -336,9 +362,16 @@ impl Exposed {
                 .filter(|d| !d.is_empty())
                 .unwrap_or("")
                 .to_string();
-            let entry = match self.aliases.get(&state.entity_id).filter(|a| !a.is_empty()) {
-                Some(aliases) => format!("{} ({})", short, aliases.join(", ")),
-                None => short.clone(),
+            // Only the aliases in the language being spoken, so the LLM names things that way
+            let aliases: Vec<&str> = self
+                .aliases
+                .get(&state.entity_id)
+                .map(|a| a.iter().filter(|a| crate::language::alias_language(a) == lang).map(String::as_str).collect())
+                .unwrap_or_default();
+            let entry = if aliases.is_empty() {
+                short.clone()
+            } else {
+                format!("{} ({})", short, aliases.join(", "))
             };
             devices.entry(device).or_default().push(entry);
         }
@@ -401,7 +434,7 @@ impl HomeAssistant {
             token: token.trim().to_string(),
             preferred: AtomicUsize::new(0),
             exposed: tokio::sync::Mutex::new(None),
-            catalogue: std::sync::Mutex::new(String::new()),
+            catalogue: std::sync::Mutex::new((String::new(), String::new())),
         })
     }
 
@@ -416,13 +449,22 @@ impl HomeAssistant {
 
     fn update_catalogue(&self, exposed: &Exposed, states: &[EntityState]) {
         if let Ok(mut catalogue) = self.catalogue.lock() {
-            *catalogue = exposed.catalogue(states);
+            *catalogue = (
+                exposed.catalogue(states, crate::language::Lang::En),
+                exposed.catalogue(states, crate::language::Lang::Fr),
+            );
         }
     }
 
     /// Names of the exposed entities, empty until they have been fetched.
     pub fn catalogue(&self) -> String {
-        self.catalogue.lock().map(|c| c.clone()).unwrap_or_default()
+        self.catalogue
+            .lock()
+            .map(|c| match crate::language::current() {
+                crate::language::Lang::En => c.0.clone(),
+                crate::language::Lang::Fr => c.1.clone(),
+            })
+            .unwrap_or_default()
     }
 
     /// The exposed entities, fetched again when the cached list is old.
@@ -536,21 +578,8 @@ impl HomeAssistant {
 
     /// Readings for the entities a question is about, for the LLM to phrase.
     pub async fn status(&self, query: &str) -> Result<String> {
-        let mut states = self.states().await?;
-        let no_aliases = HashMap::new();
-        let exposed = self.exposed().await;
-        if let Some(exposed) = &exposed {
-            self.update_catalogue(exposed, &states);
-        }
-        let aliases = match &exposed {
-            Some(exposed) if !exposed.aliases.is_empty() => {
-                states.retain(|s| exposed.aliases.contains_key(&s.entity_id));
-                &exposed.aliases
-            }
-            // Nothing exposed (or the list couldn't be read): look at everything
-            _ => &no_aliases,
-        };
-        let matches = best_matches(query, &states, aliases);
+        let (states, aliases) = self.visible_states().await?;
+        let matches = best_matches(query, &states, &aliases);
         if matches.is_empty() {
             return Ok(format!("No Home Assistant entity matches '{}'.", query));
         }
@@ -559,6 +588,175 @@ impl HomeAssistant {
             .map(|s| format!("{}: {}", s.name(), s.describe()))
             .collect::<Vec<_>>()
             .join(". "))
+    }
+
+    /// The entities that can be talked about, restricted to the exposed ones when known,
+    /// with their aliases.
+    async fn visible_states(&self) -> Result<(Vec<EntityState>, HashMap<String, Vec<String>>)> {
+        let mut states = self.states().await?;
+        let exposed = self.exposed().await;
+        if let Some(exposed) = &exposed {
+            self.update_catalogue(exposed, &states);
+        }
+        match exposed {
+            Some(exposed) if !exposed.aliases.is_empty() => {
+                states.retain(|s| exposed.aliases.contains_key(&s.entity_id));
+                Ok((states, exposed.aliases.clone()))
+            }
+            _ => Ok((states, HashMap::new())),
+        }
+    }
+
+    /// Turn a device on or off, dim a light, set a thermostat or activate a scene.
+    /// Returns the sentence to speak, or a note for the LLM when it must ask which device.
+    pub async fn control(&self, request: &ControlRequest) -> Result<ControlOutcome> {
+        let (mut states, aliases) = self.visible_states().await?;
+        states.retain(|s| CONTROLLABLE_DOMAINS.contains(&s.domain()));
+        // "All the lights" means all of them, not the first few
+        let matches = all_matches(&request.target, &states, &aliases);
+
+        if matches.is_empty() {
+            return Ok(ControlOutcome::Ask(format!(
+                "No controllable device matches '{}'. Nothing was changed.",
+                request.target
+            )));
+        }
+        if matches.len() > 1 && !request.all {
+            let names: Vec<String> = matches.iter().map(|s| s.spoken_name(&aliases)).collect();
+            return Ok(ControlOutcome::Ask(format!(
+                "Several devices match '{}': {}. Nothing was changed; ask the user which one.",
+                request.target,
+                names.join(", ")
+            )));
+        }
+
+        let mut spoken = Vec::new();
+        for entity in matches {
+            let name = entity.spoken_name(&aliases);
+            if matches!(entity.state.as_str(), "unavailable" | "unknown") {
+                spoken.push(crate::language::tr("{} unavailable.", "{} : indisponible.").replace("{}", &name));
+                continue;
+            }
+            let (service, data, done) = plan_service(entity, request)?;
+            self.call_service(entity.domain(), service, data).await?;
+            // Home Assistant can answer before the device has switched (Z-Wave reports a moment
+            // later), so a toggle's result is worked out from the state it had before
+            let sentence = done.sentence(&name, entity.state == "on");
+            info!("Home Assistant: {}.{} on {}: {}", entity.domain(), service, entity.entity_id, sentence);
+            spoken.push(sentence);
+        }
+        Ok(ControlOutcome::Done(spoken.join(" ")))
+    }
+
+    async fn call_service(&self, domain: &str, service: &str, data: Value) -> Result<Value> {
+        let base = &self.urls[self.preferred.load(Ordering::Relaxed)];
+        let response = self
+            .client
+            .post(format!("{}/api/services/{}/{}", base, domain, service))
+            .bearer_auth(&self.token)
+            .json(&data)
+            .send()
+            .await
+            .context("Home Assistant is not reachable")?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            bail!("Home Assistant refused {}.{} ({}): {}", domain, service, status, body.trim());
+        }
+        Ok(response.json().await.unwrap_or(Value::Null))
+    }
+}
+
+/// What the user asked home_control to do.
+#[derive(Debug, Default)]
+pub struct ControlRequest {
+    pub target: String,
+    /// "on", "off" or "toggle"
+    pub action: String,
+    /// Light brightness in percent
+    pub brightness: Option<f64>,
+    /// Thermostat target in degrees
+    pub temperature: Option<f64>,
+    /// Act on every matching device (only when the user said "all")
+    pub all: bool,
+}
+
+pub enum ControlOutcome {
+    /// Done; the sentence to speak.
+    Done(String),
+    /// Nothing done; a note for the LLM (ask which device, or say none matches).
+    Ask(String),
+}
+
+/// What a service call achieved, to be said in the current language.
+#[derive(Debug, PartialEq)]
+enum Done {
+    On,
+    Off,
+    /// A toggle: on or off depending on the state before
+    Toggled,
+    Brightness(f64),
+    Temperature(f64),
+}
+
+impl Done {
+    fn sentence(&self, name: &str, was_on: bool) -> String {
+        use crate::language::{current, Lang};
+        let on = match self {
+            Done::On => true,
+            Done::Off => false,
+            Done::Toggled => !was_on,
+            Done::Brightness(percent) => {
+                return match current() {
+                    Lang::En => format!("{} at {} percent.", name, percent),
+                    Lang::Fr => format!("{} : {} pour cent.", name, percent),
+                }
+            }
+            Done::Temperature(degrees) => {
+                return match current() {
+                    Lang::En => format!("{} set to {} degrees.", name, round_reading(*degrees)),
+                    Lang::Fr => format!("{} : consigne {} degrés.", name, round_reading(*degrees)),
+                }
+            }
+        };
+        match (current(), on) {
+            (Lang::En, true) => format!("{} activated.", name),
+            (Lang::En, false) => format!("{} deactivated.", name),
+            // "Activation : Lampe de lecture" avoids agreeing "activé/activée" with the name
+            (Lang::Fr, true) => format!("Activation : {}.", name),
+            (Lang::Fr, false) => format!("Désactivation : {}.", name),
+        }
+    }
+}
+
+/// The Home Assistant service to call, its data, and what it achieves.
+fn plan_service(entity: &EntityState, request: &ControlRequest) -> Result<(&'static str, Value, Done)> {
+    let id = json!(entity.entity_id);
+    let action = request.action.to_lowercase();
+    match entity.domain() {
+        "scene" => Ok(("turn_on", json!({"entity_id": id}), Done::On)),
+        "climate" => match request.temperature {
+            Some(degrees) => Ok((
+                "set_temperature",
+                json!({"entity_id": id, "temperature": degrees}),
+                Done::Temperature(degrees),
+            )),
+            None => match action.as_str() {
+                "on" => Ok(("turn_on", json!({"entity_id": id}), Done::On)),
+                "off" => Ok(("turn_off", json!({"entity_id": id}), Done::Off)),
+                _ => bail!("say which temperature to set, or on or off"),
+            },
+        },
+        "light" if request.brightness.is_some() && action != "off" => {
+            let percent = request.brightness.unwrap_or(100.0).clamp(1.0, 100.0).round();
+            Ok(("turn_on", json!({"entity_id": id, "brightness_pct": percent}), Done::Brightness(percent)))
+        }
+        _ => match action.as_str() {
+            "on" => Ok(("turn_on", json!({"entity_id": id}), Done::On)),
+            "off" => Ok(("turn_off", json!({"entity_id": id}), Done::Off)),
+            "toggle" => Ok(("toggle", json!({"entity_id": id}), Done::Toggled)),
+            other => bail!("unknown action '{}', expected on, off or toggle", other),
+        },
     }
 }
 
@@ -683,8 +881,13 @@ mod tests {
             entity("sensor.hidden", "1", json!({"friendly_name": "Not exposed"})),
         ];
         assert_eq!(
-            exposed.catalogue(&states),
+            exposed.catalogue(&states, crate::language::Lang::Fr),
             "Relais; Chevet Michel: Relais; Station: Dewpoint, Weekly Rain (pluie semaine)"
+        );
+        // French aliases are left out when speaking English
+        assert_eq!(
+            exposed.catalogue(&states, crate::language::Lang::En),
+            "Relais; Chevet Michel: Relais; Station: Dewpoint, Weekly Rain"
         );
     }
 
@@ -695,6 +898,35 @@ mod tests {
         assert_eq!(speak_time("not a time"), "not a time");
         let lightning = entity("sensor.last_lightning", "2020-10-09T00:31:27+00:00", json!({"device_class": "timestamp"}));
         assert!(lightning.describe().contains("October 2020 at"), "{}", lightning.describe());
+    }
+
+    #[test]
+    fn control_requests_become_service_calls() {
+        let light = entity("light.cuisine", "off", json!({"friendly_name": "Lumière"}));
+        let req = |action: &str, brightness: Option<f64>, temperature: Option<f64>| ControlRequest {
+            target: "x".into(), action: action.into(), brightness, temperature, all: false,
+        };
+        let (service, data, done) = plan_service(&light, &req("on", None, None)).unwrap();
+        assert_eq!((service, done), ("turn_on", Done::On));
+        assert_eq!(data, json!({"entity_id": "light.cuisine"}));
+        let (service, data, done) = plan_service(&light, &req("on", Some(30.0), None)).unwrap();
+        assert_eq!((service, done), ("turn_on", Done::Brightness(30.0)));
+        assert_eq!(data["brightness_pct"], json!(30.0));
+        assert_eq!(plan_service(&light, &req("off", Some(30.0), None)).unwrap().0, "turn_off");
+        assert_eq!(plan_service(&light, &req("toggle", None, None)).unwrap().2, Done::Toggled);
+        assert!(plan_service(&light, &req("explode", None, None)).is_err());
+
+        let heat = entity("climate.chauffage", "heat", json!({}));
+        let (service, data, done) = plan_service(&heat, &req("on", None, Some(21.0))).unwrap();
+        assert_eq!((service, done), ("set_temperature", Done::Temperature(21.0)));
+        assert_eq!(data["temperature"], json!(21.0));
+
+        let scene = entity("scene.bonne_nuit", "2026-11-07T10:00:00+00:00", json!({}));
+        assert_eq!(plan_service(&scene, &req("off", None, None)).unwrap().0, "turn_on");
+
+        // The tests run in English (the default)
+        assert_eq!(Done::Toggled.sentence("Kitchen light", true), "Kitchen light deactivated.");
+        assert_eq!(Done::Temperature(21.0).sentence("Heating A", false), "Heating A set to 21 degrees.");
     }
 
     #[test]

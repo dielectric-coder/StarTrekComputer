@@ -12,7 +12,7 @@ use tracing::{info, error, debug, warn};
 const MAX_TOOL_ROUNDS: usize = 3;
 
 /// Said instead of a confirmation the model made up without calling a tool.
-const NO_ACTION_TAKEN: &str = "Unable to comply. No action was taken.";
+const NO_ACTION_TAKEN: (&str, &str) = ("Unable to comply. No action was taken.", "Impossible d'exécuter. Aucune action effectuée.");
 
 /// Sent back when the model claims an action it didn't perform, giving it one chance to do it.
 const UNPERFORMED_ACTION_NUDGE: &str = "(System note: you did not call any tool, so nothing was \
@@ -156,8 +156,18 @@ impl LLMClient {
              pressure, doors, lights, sensors), call home_status when it is available, every time, even \
              if the question was asked before: readings change, so never reuse or guess one. \
              Name a reading by what it measures (outdoor temperature), not by the device's model name. \
+             To turn a light, switch, plug or fan on or off, dim a light, set the heating or activate a \
+             scene, call home_control; never say a device was turned on, off or set unless it did. \
              Your replies are spoken aloud: plain sentences only, no markdown, lists or symbols.",
         );
+        if crate::language::current() == crate::language::Lang::Fr {
+            system_prompt.push_str(
+                " The user is speaking French: always answer in French, in the same clipped style. \
+                 When naming a device, use its French alias.",
+            );
+        } else {
+            system_prompt.push_str(" Always answer in English. When naming a device, use its English alias if it has one.");
+        }
 
         // Add user preference adaptations
         system_prompt = self.adapt_to_user_preferences(&system_prompt, &rag_context);
@@ -213,7 +223,7 @@ impl LLMClient {
                         continue;
                     }
                     warn!("LLM claimed an action without a tool call again: {}", text);
-                    response_text = Some(NO_ACTION_TAKEN.to_string());
+                    response_text = Some(crate::language::tr(NO_ACTION_TAKEN.0, NO_ACTION_TAKEN.1).to_string());
                     break;
                 }
                 response_text = Some(text);
@@ -328,6 +338,50 @@ fn claims_action(text: &str) -> bool {
             .unwrap()
         })
         .is_match(text)
+        || home_claim(text)
+        || french_claim(text)
+}
+
+/// The same made-up confirmations in French: "Minuterie réglée", "Lumière cuisine allumée".
+fn french_claim(text: &str) -> bool {
+    static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static ASKING: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let asking = ASKING
+        .get_or_init(|| {
+            regex::Regex::new(r"(?i)\b(quel|quelle|quels|quelles|lequel|laquelle|lesquels|lesquelles)\b[^.]*\?|\bpr[ée]cise[rz]?\b").unwrap()
+        })
+        .is_match(text);
+    !asking && PATTERN
+        .get_or_init(|| {
+            regex::Regex::new(
+                r"(?i)\b(minuterie|minuteur|rappel|alarme)s?\b[^.]*\b(r[ée]gl[ée]e?s?|annul[ée]e?s?|programm[ée]e?s?|cr[ée][ée]e?s?|supprim[ée]e?s?|ajout[ée]e?s?|effac[ée]e?s?)\b|\b(allum|activ|d[ée]sactiv)[ée]e?s?\b|\b[ée]teinte?s?\b|^\W*(activation|d[ée]sactivation)\b|\b(chauffage|thermostat)\b[^.]*\br[ée]gl[ée]e?\b|\bvolume\s+(r[ée]gl[ée]|\d+\s+pour\s*cent|coup[ée])|\bentr[ée]e\b[^.]*\benregistr[ée]e\b",
+            )
+            .unwrap()
+        })
+        .is_match(text)
+}
+
+/// "Kitchen light activated", "I turned off the lamp", "Heating set to 21 degrees".
+fn home_claim(text: &str) -> bool {
+    static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static NOT_DONE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    // Asking what to act on is not a claim: "Specify the device to be activated."
+    let asking = NOT_DONE
+        .get_or_init(|| {
+            regex::Regex::new(
+                r"(?i)\b(to|should|must|can|will|would|could|shall)\s+be\s+(de)?activated\b|\b(which|what)\b[^.]*\?|\bspecify\b",
+            )
+            .unwrap()
+        })
+        .is_match(text);
+    !asking && PATTERN
+        .get_or_init(|| {
+            regex::Regex::new(
+                r"(?i)\b(activated|deactivated)\b|\b(turned|switched|powered)\s+(on|off)\b|\b(turned|switched|powered)\s+(the\s+|your\s+)?\w+(\s+\w+)?\s+(on|off)\b|\b(heating|thermostat|chauffage)\b[^.]*\bset\s+to\b|\bnow\s+(on|off)\b",
+            )
+            .unwrap()
+        })
+        .is_match(text)
 }
 
 #[cfg(test)]
@@ -345,6 +399,17 @@ mod tests {
             "I have cancelled the alarm.",
             "Log entry recorded, 12 words.",
             "Captain's log, stardate 2026.289. Recording.",
+            "Lumière cuisine activated.",
+            "Affirmative. I have turned off the kitchen light.",
+            "The lamp has been switched on.",
+            "Heating set to 21 degrees.",
+            "The greenhouse lamp is now on.",
+            "Minuterie réglée pour 10 minutes.",
+            "Rappel annulé.",
+            "Lumière cuisine allumée.",
+            "La lampe de lecture est éteinte.",
+            "Activation : Lumière cuisine.",
+            "Chauffage A réglé à 21 degrés.",
         ] {
             assert!(claims_action(text), "{text}");
         }
@@ -359,6 +424,13 @@ mod tests {
             "The volume of a sphere is four thirds pi r cubed.",
             "An alarm clock is a clock that sounds at a set time.",
             "The first recording of the theme dates from 1966.",
+            "Outdoor temperature is 8 degrees Celsius.",
+            "The light from the Sun takes eight minutes to reach Earth.",
+            "Insufficient information. Please specify the device or system to be activated.",
+            "Which light should be turned on?",
+            "La température extérieure est de 8 degrés.",
+            "Quelle lumière faut-il allumer ?",
+            "Veuillez préciser l'appareil.",
         ] {
             assert!(!claims_action(text), "{text}");
         }

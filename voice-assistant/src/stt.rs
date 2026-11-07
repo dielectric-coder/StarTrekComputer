@@ -2,7 +2,7 @@ use anyhow::Result;
 use tempfile::NamedTempFile;
 use tokio::process::Command as TokioCommand;
 use crate::config::AssistantConfig;
-use tracing::{info, error};
+use tracing::{info, error, warn};
 use hound::{WavWriter, WavSpec};
 
 pub struct SpeechToText {
@@ -60,9 +60,23 @@ impl SpeechToText {
 
         // Run whisper.cpp with correct model path
         let threads = std::thread::available_parallelism().map(|n| n.get().min(8)).unwrap_or(4);
+        // French needs the multilingual model; English keeps the faster English-only one
+        let (model, language) = match crate::language::current() {
+            crate::language::Lang::Fr if self.config.stt.french_model_path.exists() => {
+                (&self.config.stt.french_model_path, "fr")
+            }
+            crate::language::Lang::Fr => {
+                warn!(
+                    "French model {} not found; listening in English",
+                    self.config.stt.french_model_path.display()
+                );
+                (&self.config.stt.model_path, self.config.stt.language.as_str())
+            }
+            crate::language::Lang::En => (&self.config.stt.model_path, self.config.stt.language.as_str()),
+        };
         let output = TokioCommand::new(&self.config.stt.whisper_binary)
             .arg("-m")
-            .arg(&self.config.stt.model_path)
+            .arg(model)
             .arg("-f")
             .arg(temp_path)
             .arg("--no-timestamps")
@@ -70,7 +84,7 @@ impl SpeechToText {
             .arg("--threads")
             .arg(threads.to_string())
             .arg("--language")
-            .arg(&self.config.stt.language)
+            .arg(language)
             .output()
             .await?;
 

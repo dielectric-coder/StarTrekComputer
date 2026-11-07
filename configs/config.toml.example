@@ -14,6 +14,9 @@ output_device = null         # null = system default, or "hw:0,0" for specific d
 engine = "whisper"                                                      # STT engine ("whisper", "vosk")
 model_path = "/opt/startrek/startrek/whisper.cpp/models/ggml-base.en.bin"  # Path to STT model
 language = "en"                                                        # Language code
+# Multilingual model used after "Computer, work in French" (download with
+# whisper.cpp/models/download-ggml-model.sh small); "work in English" switches back
+french_model_path = "/opt/startrek/startrek/whisper.cpp/models/ggml-small.bin"
 
 [tts]
 # Text-to-Speech settings  
@@ -21,6 +24,7 @@ engine = "piper"                                                           # TTS
 model_path = "/opt/startrek/startrek/piper/voices/en_US-lessac-medium.onnx"  # Path to TTS model
 voice = "lessac"                                                          # Voice name
 speed = 0.9                                                              # Speech speed (0.5-2.0)
+french_voice = "ff_siwis"                                                 # Kokoro voice when working in French
 
 [llm]
 # Large Language Model settings

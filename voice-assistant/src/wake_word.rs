@@ -54,7 +54,7 @@ pub fn addressed_command(text: &str) -> Option<String> {
     static ADDRESSED: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = ADDRESSED.get_or_init(|| {
         regex::Regex::new(
-            r"(?i)^[\s\p{P}]*(?:(?:hey|hi|ok|okay|uh|um|oh|so|alright|all right)[\s\p{P}]+)*computer\b[\s\p{P}]*(.*)$",
+            r"(?i)^[\s\p{P}]*(?:(?:hey|hi|ok|okay|uh|um|oh|so|alright|all right|hé|he|euh|bon|dis|alors)[\s\p{P}]+)*(?:computer|computeur|compiouteur|ordinateur)\b[\s\p{P}]*(.*)$",
         )
         .expect("valid wake word pattern")
     });
@@ -78,6 +78,9 @@ mod tests {
         assert_eq!(addressed_command("Hey computer set a timer").as_deref(), Some("set a timer"));
         assert_eq!(addressed_command("Okay, computer. Stop.").as_deref(), Some("Stop."));
         assert_eq!(addressed_command("...Computer!").as_deref(), Some(""));
+        // How the French model writes it
+        assert_eq!(addressed_command("Computeur, allume la lampe de lecture.").as_deref(), Some("allume la lampe de lecture."));
+        assert_eq!(addressed_command("Euh, ordinateur.").as_deref(), Some(""));
     }
 
     #[test]

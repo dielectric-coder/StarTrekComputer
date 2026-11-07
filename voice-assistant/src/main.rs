@@ -6,6 +6,7 @@ use tracing::{debug, info, error, warn};
 
 mod audio;
 mod home;
+mod language;
 mod llm;
 mod search;
 mod stt;
@@ -24,6 +25,7 @@ use search::{WebSearcher, SearchResults};
 use stt::SpeechToText;
 use tools::ToolBox;
 use tts::TextToSpeech;
+use language::tr;
 use wake_word::{addressed_command, WakeWordDetector};
 
 #[derive(Debug, Clone)]
@@ -67,6 +69,7 @@ pub struct VoiceAssistant {
 impl VoiceAssistant {
     pub async fn new(config: AssistantConfig) -> Result<Self> {
         info!("Initializing Voice Assistant...");
+        language::init(&config.general.data_dir);
 
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
@@ -260,7 +263,7 @@ impl VoiceAssistant {
             AssistantEvent::Error(error) => {
                 error!("Assistant error: {}", error);
                 self.command_tx.send(
-                    AssistantCommand::SpeakText("Sorry, I encountered an error.".to_string())
+                    AssistantCommand::SpeakText(tr("Sorry, I encountered an error.", "Désolé, une erreur s'est produite.").to_string())
                 )?;
             }
         }
@@ -282,8 +285,17 @@ impl VoiceAssistant {
         let cleaned_input = self.strip_wake_word(&input);
         let input_lower = cleaned_input.to_lowercase();
 
+        // "Work in French" / "work in English": nothing to confirm or ask the LLM
+        if let Some(lang) = language::switch_command(&cleaned_input) {
+            language::set(lang);
+            // Said in the new language and voice
+            self.speak(tr("Working in English.", "Mode français activé.")).await?;
+            self.command_tx.send(AssistantCommand::StopListening)?;
+            return Ok(());
+        }
+
         // Voice confirmation: echo back what was heard
-        let confirmation = format!("You have requested: {}", cleaned_input);
+        let confirmation = format!("{} {}", tr("You have requested:", "Requête :"), cleaned_input);
         self.speak(&confirmation).await?;
 
         // Give the user a moment to say "negative" before anything happens.
@@ -298,7 +310,7 @@ impl VoiceAssistant {
         }
 
         // Processing notification
-        self.speak("Processing...").await?;
+        self.speak(tr("Processing...", "Traitement en cours...")).await?;
         if *cancel.borrow() {
             return self.cancel_request().await;
         }
@@ -320,7 +332,7 @@ impl VoiceAssistant {
 
     async fn cancel_request(&self) -> Result<()> {
         info!("Request canceled");
-        self.speak("Request canceled.").await?;
+        self.speak(tr("Request canceled.", "Requête annulée.")).await?;
         self.command_tx.send(AssistantCommand::StopListening)?;
         Ok(())
     }
@@ -462,13 +474,15 @@ async fn wait_for_cancel(cancel: &mut watch::Receiver<bool>) {
 fn is_cancel_command(text: &str) -> bool {
     let words: Vec<String> = text
         .split_whitespace()
-        .map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase())
+        .map(|w| language::fold(&w.chars().filter(|c| c.is_alphanumeric()).collect::<String>()))
         .filter(|w| !w.is_empty())
         .collect();
     let words: Vec<&str> = words.iter().map(String::as_str).skip_while(|w| *w == "computer").collect();
     matches!(
         words.as_slice(),
         ["negative"] | ["stop"] | ["cancel"] | ["abort"] | ["belay", "that"] | ["never", "mind"] | ["nevermind"]
+            | ["negatif"] | ["annule"] | ["annuler"] | ["annulation"] | ["arrete"] | ["laisse", "tomber"]
+            | ["oublie", "ca"] | ["non", "merci"]
     )
 }
 
@@ -530,7 +544,7 @@ mod tests {
 
     #[test]
     fn cancel_words_on_their_own() {
-        for text in ["Negative.", "Stop!", "computer, stop", "Cancel", "Belay that.", "Never mind", "Abort."] {
+        for text in ["Negative.", "Stop!", "computer, stop", "Cancel", "Belay that.", "Never mind", "Abort.", "Négatif.", "Annule !", "Laisse tomber.", "Arrête."] {
             assert!(is_cancel_command(text), "{text}");
         }
     }

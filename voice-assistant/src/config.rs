@@ -53,6 +53,13 @@ pub struct SttConfig {
     /// whisper.cpp command-line binary (whisper-cli)
     #[serde(default = "default_whisper_binary")]
     pub whisper_binary: PathBuf,
+    /// Multilingual whisper model used when working in French ("Computer, work in French")
+    #[serde(default = "default_french_model_path")]
+    pub french_model_path: PathBuf,
+}
+
+fn default_french_model_path() -> PathBuf {
+    install_dir().join("whisper.cpp/models/ggml-small.bin")
 }
 
 fn default_whisper_binary() -> PathBuf {
@@ -81,6 +88,13 @@ pub struct TtsConfig {
     pub kokoro_model: PathBuf,
     #[serde(default = "default_kokoro_voices")]
     pub kokoro_voices: PathBuf,
+    /// Kokoro voice used when working in French
+    #[serde(default = "default_french_voice")]
+    pub french_voice: String,
+}
+
+fn default_french_voice() -> String {
+    "ff_siwis".to_string()
 }
 
 fn default_kokoro_python() -> PathBuf {
@@ -196,6 +210,7 @@ impl Default for AssistantConfig {
                 model_path: startrek_dir.join("whisper.cpp/models/ggml-base.en.bin"),
                 language: "en".to_string(),
                 whisper_binary: default_whisper_binary(),
+                french_model_path: default_french_model_path(),
             },
             tts: TtsConfig {
                 engine: "piper".to_string(),
@@ -207,6 +222,7 @@ impl Default for AssistantConfig {
                 kokoro_python: default_kokoro_python(),
                 kokoro_model: default_kokoro_model(),
                 kokoro_voices: default_kokoro_voices(),
+                french_voice: default_french_voice(),
             },
             llm: LlmConfig {
                 base_url: "http://localhost:11434".to_string(),

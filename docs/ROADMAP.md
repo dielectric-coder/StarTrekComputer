@@ -21,6 +21,8 @@ Status: ✅ done · 🔜 planned / easy next step · 💡 idea
 | ✅ | Status report | "Computer, status report" → battery, CPU, memory, disk, uptime | — |
 | ✅ | Volume control | "Set volume to 40 percent", "louder", "mute" | `wpctl` (PipeWire), else `pactl` (PulseAudio) |
 | ✅ | Captain's log | "Begin captain's log" … "end log"; "read back today's log" | — |
+| ✅ | English / French | "Computer, work in French" … "travaille en anglais": recognition, voice, answers and Home Assistant aliases follow the language | multilingual whisper model (`ggml-small.bin`), Kokoro `ff_siwis` |
+| ✅ | Home control | "Turn on the reading lamp", "kitchen light to 30 percent", "heating A to 21 degrees" (exposed lights, switches, fans, thermostats, scenes; never locks or garage doors) | Home Assistant |
 | ✅ | Home readings | "Basement temperature?", "is the garage door open?" (read-only; LAN or Tailscale address) | Home Assistant API + long-lived token, `[home_assistant]` in config |
 | 🔜 | Notes and dictation | "Take a note: buy coffee filters", "what are my notes?" | — |
 | 🔜 | Open things | "Open my downloads folder", "open GitHub" | `xdg-open` |
@@ -44,7 +46,6 @@ Status: ✅ done · 🔜 planned / easy next step · 💡 idea
 | 💡 | Media control | "Pause the music", "next track", "what's playing?" | `playerctl` |
 | 💡 | Web search | "Search for the latest ICC news" (already wired in; summarized by the LLM) | `~/startrek/search_tool.py` |
 | 💡 | Calendar | "What's on my calendar tomorrow?" | `khal` or `gcalcli` |
-| 💡 | Smart home control | "Lights to 30 percent", "lock the front door" | Home Assistant API (readings already done) |
 
 ## Bigger ideas
 

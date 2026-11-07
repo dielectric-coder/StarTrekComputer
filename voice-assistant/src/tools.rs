@@ -14,7 +14,8 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
-use crate::{config::AssistantConfig, home::HomeAssistant, AssistantCommand};
+use crate::language::tr;
+use crate::{config::AssistantConfig, home::{ControlOutcome, ControlRequest, HomeAssistant}, AssistantCommand};
 
 /// A captain's log recording ends by itself after this much silence.
 const LOG_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -23,6 +24,8 @@ const LOG_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const LOG_END_PHRASES: &[&str] = &[
     "end log", "and log", "end of log", "and of log", "end the log", "and the log",
     "end captain's log", "end captains log", "stop log", "stop recording", "end recording",
+    "fin du journal", "fin de journal", "fin de l'enregistrement", "arrête l'enregistrement",
+    "arrete l'enregistrement",
 ];
 
 /// Result of running a tool.
@@ -144,6 +147,19 @@ impl ToolBox {
                     }, "required": ["query"]}
                 }}
             ));
+            tools.as_array_mut().expect("tool list").push(json!(
+                {"type": "function", "function": {
+                    "name": "home_control",
+                    "description": "Change a device in the user's Home Assistant: turn lights, switches, plugs and fans on or off, dim a light, set a thermostat, or activate a scene. Use the names and aliases listed under home_status. Only this tool can change a device.",
+                    "parameters": {"type": "object", "properties": {
+                        "target": {"type": "string", "description": "The device, by its alias or name, e.g. 'lumière cuisine', 'lampe de lecture', 'chauffage A', 'bonne nuit'"},
+                        "action": {"type": "string", "enum": ["on", "off", "toggle"], "description": "on also activates a scene"},
+                        "brightness": {"type": "number", "description": "Light brightness in percent, 1 to 100"},
+                        "temperature": {"type": "number", "description": "Thermostat target in degrees"},
+                        "all": {"type": "boolean", "description": "Only when the user explicitly asks for all matching devices"}
+                    }, "required": ["target", "action"]}
+                }}
+            ));
         }
         tools
     }
@@ -224,6 +240,7 @@ impl ToolBox {
             "start_captains_log" => self.start_captains_log().await,
             "read_captains_log" => read_captains_log(&self.inner.data_dir, args).await,
             "home_status" => self.home_status(args).await,
+            "home_control" => self.home_control(args).await,
             _ => Err(anyhow::anyhow!("unknown tool {}", name)),
         };
         result.unwrap_or_else(|e| {
@@ -238,6 +255,22 @@ impl ToolBox {
         Ok(ToolOutput::data(home.status(&query).await?))
     }
 
+    async fn home_control(&self, args: &Value) -> Result<ToolOutput> {
+        let home = self.inner.home.as_ref().context("Home Assistant is not configured")?;
+        let request = ControlRequest {
+            target: str_arg(args, "target").context("target is required")?,
+            action: str_arg(args, "action").unwrap_or_else(|| "on".to_string()),
+            brightness: args.get("brightness").and_then(Value::as_f64),
+            temperature: args.get("temperature").and_then(Value::as_f64),
+            all: args.get("all").and_then(Value::as_bool).unwrap_or(false),
+        };
+        Ok(match home.control(&request).await? {
+            // A fixed confirmation, so the LLM can't embellish what happened
+            ControlOutcome::Done(speech) => ToolOutput::speak(speech),
+            ControlOutcome::Ask(note) => ToolOutput::data(note),
+        })
+    }
+
     async fn set_timer(&self, args: &Value) -> Result<ToolOutput> {
         let seconds = num(args, "hours") * 3600.0 + num(args, "minutes") * 60.0 + num(args, "seconds");
         if seconds < 1.0 {
@@ -249,9 +282,9 @@ impl ToolBox {
 
         let duration = describe_duration(seconds.round() as u64);
         Ok(ToolOutput::speak(if label.is_empty() {
-            format!("Timer set for {}.", duration)
+            format!("{} {}.", tr("Timer set for", "Minuterie réglée pour"), duration)
         } else {
-            format!("Timer set for {}: {}.", duration, label)
+            format!("{} {}: {}.", tr("Timer set for", "Minuterie réglée pour"), duration, label)
         }))
     }
 
@@ -285,13 +318,13 @@ impl ToolBox {
         };
 
         Inner::schedule(&self.inner, Kind::Reminder, message.clone(), due).await;
-        Ok(ToolOutput::speak(format!("Reminder set for {}: {}.", describe_when(due), message)))
+        Ok(ToolOutput::speak(format!("{} {}: {}.", tr("Reminder set for", "Rappel prévu"), describe_when(due), message)))
     }
 
     async fn list_timers(&self) -> ToolOutput {
         let scheduled = self.inner.scheduled.lock().await;
         if scheduled.is_empty() {
-            return ToolOutput::speak("No active timers or reminders.");
+            return ToolOutput::speak(tr("No active timers or reminders.", "Aucune minuterie ni aucun rappel actif."));
         }
         let now = Local::now();
         let items: Vec<String> = scheduled
@@ -300,12 +333,12 @@ impl ToolBox {
                 Kind::Timer => {
                     let remaining = describe_duration((s.due - now).num_seconds().max(0) as u64);
                     if s.label.is_empty() {
-                        format!("Timer, {} remaining", remaining)
+                        format!("{}, {} {}", tr("Timer", "Minuterie"), remaining, tr("remaining", "restantes"))
                     } else {
-                        format!("Timer for {}, {} remaining", s.label, remaining)
+                        format!("{} {}, {} {}", tr("Timer for", "Minuterie"), s.label, remaining, tr("remaining", "restantes"))
                     }
                 }
-                Kind::Reminder => format!("Reminder {}: {}", describe_when(s.due), s.label),
+                Kind::Reminder => format!("{} {}: {}", tr("Reminder", "Rappel"), describe_when(s.due), s.label),
             })
             .collect();
         ToolOutput::speak(format!("{}.", items.join(". ")))
@@ -314,7 +347,7 @@ impl ToolBox {
     async fn cancel_timer(&self, args: &Value) -> Result<ToolOutput> {
         let mut scheduled = self.inner.scheduled.lock().await;
         if scheduled.is_empty() {
-            return Ok(ToolOutput::speak("No active timers or reminders."));
+            return Ok(ToolOutput::speak(tr("No active timers or reminders.", "Aucune minuterie ni aucun rappel actif.")));
         }
 
         let cancel_all = args.get("all").and_then(Value::as_bool).unwrap_or(false);
@@ -334,7 +367,7 @@ impl ToolBox {
         };
 
         if selected.is_empty() {
-            return Ok(ToolOutput::speak("No matching timer or reminder."));
+            return Ok(ToolOutput::speak(tr("No matching timer or reminder.", "Aucune minuterie ni aucun rappel correspondant.")));
         }
 
         let mut reminders_changed = false;
@@ -352,15 +385,15 @@ impl ToolBox {
         }
 
         Ok(ToolOutput::speak(match selected.len() {
-            1 => "Cancelled.".to_string(),
-            n => format!("{} cancelled.", n),
+            1 => tr("Cancelled.", "Annulé.").to_string(),
+            n => format!("{} {}", n, tr("cancelled.", "annulés.")),
         }))
     }
 
     async fn start_captains_log(&self) -> Result<ToolOutput> {
         let mut log = self.inner.log.lock().await;
         if log.is_some() {
-            return Ok(ToolOutput::speak("Log already recording."));
+            return Ok(ToolOutput::speak(tr("Log already recording.", "Le journal enregistre déjà.")));
         }
 
         let now = Local::now();
@@ -391,7 +424,8 @@ impl ToolBox {
                 if idle {
                     let speech = inner.end_log().await;
                     let _ = inner.command_tx.send(AssistantCommand::SpeakText(format!(
-                        "Recording stopped after one minute of silence. {}",
+                        "{} {}",
+                        tr("Recording stopped after one minute of silence.", "Enregistrement arrêté après une minute de silence."),
                         speech
                     )));
                     return;
@@ -400,8 +434,10 @@ impl ToolBox {
         });
 
         Ok(ToolOutput::speak(format!(
-            "Captain's log, stardate {}. Recording. Say end log when finished.",
-            stardate(now)
+            "{} {}. {}",
+            tr("Captain's log, stardate", "Journal du capitaine, date stellaire"),
+            stardate(now),
+            tr("Recording. Say end log when finished.", "Enregistrement. Dites fin du journal pour terminer."),
         )))
     }
 
@@ -487,9 +523,9 @@ impl Inner {
         }
 
         let text = match kind {
-            Kind::Timer if label.is_empty() => "Timer complete.".to_string(),
-            Kind::Timer => format!("Timer complete: {}.", label),
-            Kind::Reminder => format!("Reminder: {}.", label),
+            Kind::Timer if label.is_empty() => tr("Timer complete.", "Minuterie terminée.").to_string(),
+            Kind::Timer => format!("{} {}.", tr("Timer complete:", "Minuterie terminée :"), label),
+            Kind::Reminder => format!("{} {}.", tr("Reminder:", "Rappel :"), label),
         };
         info!("{}", text);
         let _ = Command::new("notify-send")
@@ -533,13 +569,13 @@ impl Inner {
             if let Err(e) = result {
                 warn!("Failed to remove empty log entry: {}", e);
             }
-            return "Nothing recorded.".to_string();
+            return tr("Nothing recorded.", "Rien n'a été enregistré.").to_string();
         }
 
         if let Err(e) = append_to_file(&session.path, "\n").await {
             warn!("Failed to finish log entry: {}", e);
         }
-        format!("Log entry recorded, {} words.", session.words)
+        format!("{} {} {}", tr("Log entry recorded,", "Entrée enregistrée,"), session.words, tr("words.", "mots."))
     }
 }
 
@@ -550,10 +586,10 @@ async fn read_captains_log(data_dir: &std::path::Path, args: &Value) -> Result<T
         None => Local::now().date_naive(),
     };
     let path = data_dir.join("captains_log").join(format!("{}.md", date.format("%Y-%m-%d")));
-    let day = date.format("%A %-d %B").to_string();
+    let day = spoken_date(date, false);
 
     let Ok(content) = tokio::fs::read_to_string(&path).await else {
-        return Ok(ToolOutput::speak(format!("No log entries for {}.", day)));
+        return Ok(ToolOutput::speak(format!("{} {}.", tr("No log entries for", "Aucune entrée de journal pour"), day)));
     };
 
     // Turn "## Stardate 2026.287, 13:45" headings into spoken introductions
@@ -561,14 +597,18 @@ async fn read_captains_log(data_dir: &std::path::Path, args: &Value) -> Result<T
     for line in content.lines() {
         let line = line.trim();
         if let Some(heading) = line.strip_prefix("## ") {
-            speech.push_str(&format!("Captain's log, {}. ", heading.replace(", ", ", at ")));
+            let heading = match crate::language::current() {
+                crate::language::Lang::En => heading.replace(", ", ", at "),
+                crate::language::Lang::Fr => heading.replace("Stardate", "date stellaire").replace(", ", ", à "),
+            };
+            speech.push_str(&format!("{}, {}. ", tr("Captain's log", "Journal du capitaine"), heading));
         } else if !line.is_empty() && !line.starts_with('#') {
             speech.push_str(line);
             speech.push(' ');
         }
     }
     if speech.is_empty() {
-        return Ok(ToolOutput::speak(format!("No log entries for {}.", day)));
+        return Ok(ToolOutput::speak(format!("{} {}.", tr("No log entries for", "Aucune entrée de journal pour"), day)));
     }
     Ok(ToolOutput::speak(speech.trim().to_string()))
 }
@@ -673,9 +713,9 @@ async fn set_volume(args: &Value) -> Result<ToolOutput> {
 
     let (percent, muted) = mixer.get().await?;
     if muted {
-        return Ok(ToolOutput::speak("Audio muted."));
+        return Ok(ToolOutput::speak(tr("Audio muted.", "Son coupé.")));
     }
-    Ok(ToolOutput::speak(format!("Volume {} percent.", percent.round())))
+    Ok(ToolOutput::speak(format!("Volume {} {}", percent.round(), tr("percent.", "pour cent."))))
 }
 
 /// Volume control for the default output: wpctl on PipeWire, pactl otherwise
@@ -783,23 +823,53 @@ fn str_arg(args: &Value, key: &str) -> Option<String> {
 
 fn describe_duration(total_seconds: u64) -> String {
     let (h, m, s) = (total_seconds / 3600, total_seconds % 3600 / 60, total_seconds % 60);
-    let unit = |n: u64, name: &str| format!("{} {}{}", n, name, if n == 1 { "" } else { "s" });
+    let unit = |n: u64, en: &str, fr: &str| {
+        let name = tr(en, fr);
+        format!("{} {}{}", n, name, if n == 1 { "" } else { "s" })
+    };
     let mut parts = Vec::new();
-    if h > 0 { parts.push(unit(h, "hour")); }
-    if m > 0 { parts.push(unit(m, "minute")); }
-    if s > 0 || parts.is_empty() { parts.push(unit(s, "second")); }
+    if h > 0 { parts.push(unit(h, "hour", "heure")); }
+    if m > 0 { parts.push(unit(m, "minute", "minute")); }
+    if s > 0 || parts.is_empty() { parts.push(unit(s, "second", "seconde")); }
     parts.join(" ")
+}
+
+const FRENCH_WEEKDAYS: [&str; 7] = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"];
+const FRENCH_MONTHS: [&str; 12] = [
+    "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+];
+
+/// "Friday 7 November" / "vendredi 7 novembre"; with `weekday_only`, just the day's name.
+fn spoken_date(date: NaiveDate, weekday_only: bool) -> String {
+    match crate::language::current() {
+        crate::language::Lang::En if weekday_only => date.format("%A").to_string(),
+        crate::language::Lang::En => date.format("%A %-d %B").to_string(),
+        crate::language::Lang::Fr => {
+            let weekday = FRENCH_WEEKDAYS[date.weekday().num_days_from_monday() as usize];
+            if weekday_only {
+                weekday.to_string()
+            } else {
+                format!("{} {} {}", weekday, date.day(), FRENCH_MONTHS[date.month0() as usize])
+            }
+        }
+    }
 }
 
 fn describe_when(due: DateTime<Local>) -> String {
     let today = Local::now().date_naive();
-    let day = match (due.date_naive() - today).num_days() {
-        0 => "today".to_string(),
-        1 => "tomorrow".to_string(),
-        2..=6 => due.format("%A").to_string(),
-        _ => due.format("%A %-d %B").to_string(),
+    let date = due.date_naive();
+    let day = match (date - today).num_days() {
+        0 => tr("today", "aujourd'hui").to_string(),
+        1 => tr("tomorrow", "demain").to_string(),
+        2..=6 => spoken_date(date, true),
+        _ => spoken_date(date, false),
     };
-    format!("{} {}", due.format("%H:%M"), day)
+    match crate::language::current() {
+        crate::language::Lang::En => format!("{} {}", due.format("%H:%M"), day),
+        // "demain à 9 h 30" reads naturally in French
+        crate::language::Lang::Fr => format!("{} à {}", day, due.format("%-H h %M")),
+    }
 }
 
 #[cfg(test)]
