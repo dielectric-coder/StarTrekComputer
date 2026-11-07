@@ -58,16 +58,17 @@ impl TextToSpeech {
             "chirp" => play_pcm(&listening_chirp(CHIRP_SAMPLE_RATE), CHIRP_SAMPLE_RATE).await,
             "voice" => self.speak("I'm listening").await,
             path => {
-                let status = Command::new("aplay")
-                    .arg("-q")
+                // paplay talks to PipeWire's Pulse server; ALSA's pipewire plugin can hang
+                let mut child = Command::new("paplay")
                     .arg(path)
-                    .status()
-                    .await
-                    .context("failed to start aplay for the listening sound")?;
-                if !status.success() {
-                    bail!("could not play listening sound {}", path);
+                    .kill_on_drop(true)
+                    .spawn()
+                    .context("failed to start paplay for the listening sound")?;
+                match tokio::time::timeout(std::time::Duration::from_secs(10), child.wait()).await {
+                    Ok(status) if status.as_ref().is_ok_and(|s| s.success()) => Ok(()),
+                    Ok(_) => bail!("could not play listening sound {}", path),
+                    Err(_) => bail!("listening sound {} did not finish playing", path),
                 }
-                Ok(())
             }
         }
     }
@@ -274,24 +275,40 @@ fn listening_chirp(sample_rate: u32) -> Vec<u8> {
 }
 
 async fn play_pcm(pcm: &[u8], sample_rate: u32) -> Result<()> {
-    let mut play_cmd = Command::new("aplay")
-        .arg("-f")
-        .arg("S16_LE")
-        .arg("-r")
-        .arg(sample_rate.to_string())
-        .arg("-c")
-        .arg("1")
-        .arg("-q")
+    // pacat goes through PipeWire's Pulse server, like parecord does for the mic.
+    // aplay's ALSA pipewire plugin can hang forever on drain, which froze the assistant.
+    let mut play_cmd = Command::new("pacat")
+        .arg("--playback")
+        .arg("--raw")
+        .arg(format!("--rate={}", sample_rate))
+        .arg("--channels=1")
+        .arg("--format=s16le")
         .stdin(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
-        .context("failed to start aplay for audio playback")?;
+        .context("failed to start pacat for audio playback")?;
 
-    if let Some(mut stdin) = play_cmd.stdin.take() {
-        stdin.write_all(pcm).await?;
+    // Never let a stuck player block the assistant: allow the clip's length plus a margin
+    let clip = std::time::Duration::from_secs_f64(pcm.len() as f64 / (2.0 * sample_rate as f64));
+    let limit = clip + std::time::Duration::from_secs(5);
+
+    let play = async {
+        if let Some(mut stdin) = play_cmd.stdin.take() {
+            stdin.write_all(pcm).await?;
+            // stdin is dropped here so pacat sees the end of the audio
+        }
+        play_cmd.wait().await?;
+        anyhow::Ok(())
+    };
+
+    let outcome = tokio::time::timeout(limit, play).await;
+    match outcome {
+        Ok(result) => result,
+        Err(_) => {
+            let _ = play_cmd.kill().await;
+            bail!("audio playback did not finish within {:.1}s", limit.as_secs_f64())
+        }
     }
-
-    play_cmd.wait().await?;
-    Ok(())
 }
 
 /// Piper voices ship a `<model>.onnx.json` that records the output sample rate.
