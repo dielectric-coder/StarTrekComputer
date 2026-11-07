@@ -100,6 +100,18 @@ impl ToolBox {
             }),
         });
 
+        // Read which entities are exposed now, so the LLM knows them from the first question
+        if inner.home.is_some() {
+            let inner = inner.clone();
+            tokio::spawn(async move {
+                if let Some(home) = &inner.home {
+                    if let Err(e) = home.warm_up().await {
+                        warn!("Home Assistant not reachable at startup: {:#}", e);
+                    }
+                }
+            });
+        }
+
         // Restore reminders; ones that came due while the assistant was off fire right away
         if let Ok(content) = tokio::fs::read_to_string(inner.reminders_path()).await {
             let saved: Vec<SavedReminder> = serde_json::from_str(&content).unwrap_or_default();
@@ -115,11 +127,18 @@ impl ToolBox {
     /// Tool definitions in Ollama's function-calling format.
     pub fn definitions(&self) -> Value {
         let mut tools = Self::base_definitions();
-        if self.inner.home.is_some() {
+        if let Some(home) = &self.inner.home {
+            let mut description = "Read sensors and devices from the user's Home Assistant: temperatures, humidity, doors, windows, lights, power, weather. Call it for any question about the house or home readings, and answer only from what it returns.".to_string();
+            let catalogue = home.catalogue();
+            if !catalogue.is_empty() {
+                // Knowing what exists keeps the model from refusing ("no historical data")
+                // questions that a current reading answers, like the last lightning strike
+                description.push_str(&format!(" Available readings (aliases in brackets): {}.", catalogue));
+            }
             tools.as_array_mut().expect("tool list").push(json!(
                 {"type": "function", "function": {
                     "name": "home_status",
-                    "description": "Read sensors and devices from the user's Home Assistant: temperatures, humidity, doors, windows, lights, power, weather. Call it for any question about the house or home readings, and answer only from what it returns.",
+                    "description": description,
                     "parameters": {"type": "object", "properties": {
                         "query": {"type": "string", "description": "What to look up, in a few words naming the room or device and the quantity, e.g. 'basement temperature', 'garage door', 'outdoor humidity'"}
                     }, "required": ["query"]}

@@ -2,17 +2,29 @@
 //!
 //! Several addresses can be configured (e.g. the home network, then Tailscale for when the
 //! laptop is away); they are tried in order and the one that last answered is tried first.
+//!
+//! The entities the user exposed to voice assistants in Home Assistant (Settings > Voice
+//! assistants > Expose), with their aliases, are the only ones the computer looks at.
 
 use anyhow::{bail, Context, Result};
+use futures_util::{SinkExt, StreamExt};
+use chrono::Datelike;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
-use tracing::{info, warn};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio_tungstenite::tungstenite::Message;
+use tracing::{debug, info, warn};
 use crate::config::{AssistantConfig, HomeAssistantConfig};
 
 /// How many entities a single answer mentions at most.
 const MAX_MATCHES: usize = 6;
+/// How long the list of exposed entities is trusted before it is fetched again.
+const EXPOSED_TTL: Duration = Duration::from_secs(300);
+/// Longest catalogue of entity names put into the LLM's tool description.
+const MAX_CATALOGUE_CHARS: usize = 1500;
 
 /// Entity kinds that never hold a reading worth speaking.
 const IGNORED_DOMAINS: &[&str] = &[
@@ -93,6 +105,7 @@ impl EntityState {
                 }
                 text
             }
+            _ if class == "timestamp" => speak_time(state),
             _ => {
                 let unit = self.attributes["unit_of_measurement"].as_str().unwrap_or("");
                 let value = state.parse::<f64>().map(round_reading).unwrap_or_else(|_| state.replace('_', " "));
@@ -100,6 +113,23 @@ impl EntityState {
             }
         }
     }
+}
+
+/// "today at 14:05", "yesterday at 09:30" or "8 October at 20:31", in local time.
+fn speak_time(state: &str) -> String {
+    let Ok(when) = chrono::DateTime::parse_from_rfc3339(state) else {
+        return state.to_string();
+    };
+    let when = when.with_timezone(&chrono::Local);
+    let today = chrono::Local::now().date_naive();
+    let day = match (today - when.date_naive()).num_days() {
+        0 => "today".to_string(),
+        1 => "yesterday".to_string(),
+        -1 => "tomorrow".to_string(),
+        _ if when.date_naive().year_ce() == today.year_ce() => when.format("%-d %B").to_string(),
+        _ => when.format("%-d %B %Y").to_string(),
+    };
+    format!("{} at {}", day, when.format("%H:%M"))
 }
 
 fn plain(value: &Value) -> String {
@@ -124,6 +154,9 @@ fn speak_unit(unit: &str) -> &str {
     match unit {
         "°C" => "degrees Celsius",
         "°F" => "degrees Fahrenheit",
+        "°" => "degrees",
+        "W/m²" => "watts per square metre",
+        "mm/h" => "millimetres per hour",
         "%" => "percent",
         "W" => "watts",
         "kW" => "kilowatts",
@@ -204,7 +237,9 @@ fn same_word(a: &str, b: &str) -> bool {
 }
 
 /// The entities a spoken question is most likely about, best first.
-pub fn best_matches<'a>(query: &str, states: &'a [EntityState]) -> Vec<&'a EntityState> {
+/// `aliases` holds the alternative names given in Home Assistant, by entity id.
+pub fn best_matches<'a>(query: &str, states: &'a [EntityState], aliases: &HashMap<String, Vec<String>>) -> Vec<&'a EntityState> {
+    let spoken = words(&heard_right(query)).join(" ");
     let wanted: Vec<String> = words(&heard_right(query)).into_iter().filter(|w| !STOP_WORDS.contains(&w.as_str())).collect();
     if wanted.is_empty() {
         return Vec::new();
@@ -216,6 +251,18 @@ pub fn best_matches<'a>(query: &str, states: &'a [EntityState]) -> Vec<&'a Entit
         .filter_map(|s| {
             let mut name_words = words(&s.name());
             name_words.extend(words(&s.entity_id.replace('_', " ")));
+            let own_aliases = aliases.get(&s.entity_id).map(Vec::as_slice).unwrap_or_default();
+            for alias in own_aliases {
+                name_words.extend(words(alias));
+            }
+            // Saying an alias in full is the clearest way to name an entity
+            let alias_bonus: usize = own_aliases
+                .iter()
+                .map(|a| words(a).join(" "))
+                .filter(|a| !a.is_empty() && format!(" {} ", spoken).contains(&format!(" {} ", a)))
+                .map(|a| 10 * a.split(' ').count())
+                .max()
+                .unwrap_or(0);
             let class_words = words(s.attributes["device_class"].as_str().unwrap_or(""));
             let in_name = |w: &str| name_words.iter().any(|n| same_word(w, n));
             let in_class = |w: &str| class_words.iter().any(|n| same_word(w, n));
@@ -232,7 +279,7 @@ pub fn best_matches<'a>(query: &str, states: &'a [EntityState]) -> Vec<&'a Entit
                     score[i] = 2;
                 }
             }
-            let hits: usize = score.iter().sum();
+            let hits: usize = score.iter().sum::<usize>() + alias_bonus;
             (hits > 0).then(|| (hits, words(&s.name()).len(), s))
         })
         .collect();
@@ -257,6 +304,45 @@ pub struct HomeAssistant {
     token: String,
     /// Index into `urls` of the address that answered last.
     preferred: AtomicUsize,
+    exposed: tokio::sync::Mutex<Option<(Instant, Arc<Exposed>)>>,
+    /// Names of the exposed entities, for the LLM's tool description.
+    catalogue: std::sync::Mutex<String>,
+}
+
+/// What the user chose to show voice assistants in Home Assistant.
+#[derive(Default)]
+pub struct Exposed {
+    /// Alternative names, by entity id; every exposed entity has an entry.
+    aliases: HashMap<String, Vec<String>>,
+    /// Short names ("Weekly Rain", not "Station Météo Mike's Lab Weekly Rain"), by entity id.
+    names: HashMap<String, String>,
+}
+
+impl Exposed {
+    fn catalogue(&self) -> String {
+        let mut entries: Vec<String> = self
+            .names
+            .iter()
+            .map(|(id, name)| match self.aliases.get(id).filter(|a| !a.is_empty()) {
+                Some(aliases) => format!("{} ({})", name, aliases.join(", ")),
+                None => name.clone(),
+            })
+            .collect();
+        entries.sort();
+        entries.dedup();
+        let mut catalogue = String::new();
+        for entry in entries {
+            if catalogue.len() + entry.len() > MAX_CATALOGUE_CHARS {
+                catalogue.push_str(", and more");
+                break;
+            }
+            if !catalogue.is_empty() {
+                catalogue.push_str(", ");
+            }
+            catalogue.push_str(&entry);
+        }
+        catalogue
+    }
 }
 
 impl HomeAssistant {
@@ -295,7 +381,100 @@ impl HomeAssistant {
             urls: ha.urls.iter().map(|u| u.trim_end_matches('/').to_string()).collect(),
             token: token.trim().to_string(),
             preferred: AtomicUsize::new(0),
+            exposed: tokio::sync::Mutex::new(None),
+            catalogue: std::sync::Mutex::new(String::new()),
         })
+    }
+
+    /// Find a reachable address and read the exposed entities ahead of the first question.
+    pub async fn warm_up(&self) -> Result<()> {
+        self.states().await?;
+        self.exposed().await;
+        Ok(())
+    }
+
+    /// Names of the exposed entities, empty until they have been fetched.
+    pub fn catalogue(&self) -> String {
+        self.catalogue.lock().map(|c| c.clone()).unwrap_or_default()
+    }
+
+    /// The exposed entities, fetched again when the cached list is old.
+    /// None when they can't be read (then every entity is considered).
+    pub async fn exposed(&self) -> Option<Arc<Exposed>> {
+        let mut cached = self.exposed.lock().await;
+        if let Some((fetched, exposed)) = cached.as_ref() {
+            if fetched.elapsed() < EXPOSED_TTL {
+                return Some(exposed.clone());
+            }
+        }
+        match self.fetch_exposed().await {
+            Ok(exposed) => {
+                info!("Home Assistant: {} entities exposed to voice assistants", exposed.names.len());
+                if let Ok(mut catalogue) = self.catalogue.lock() {
+                    *catalogue = exposed.catalogue();
+                }
+                let exposed = Arc::new(exposed);
+                *cached = Some((Instant::now(), exposed.clone()));
+                Some(exposed)
+            }
+            Err(e) => {
+                warn!("Could not read the exposed Home Assistant entities: {:#}", e);
+                // An older list is better than none
+                cached.as_ref().map(|(_, exposed)| exposed.clone())
+            }
+        }
+    }
+
+    async fn fetch_exposed(&self) -> Result<Exposed> {
+        let base = &self.urls[self.preferred.load(Ordering::Relaxed)];
+        let ws_url = format!("{}/api/websocket", base.replacen("http", "ws", 1));
+        let (mut socket, _) = tokio::time::timeout(Duration::from_secs(5), tokio_tungstenite::connect_async(&ws_url))
+            .await
+            .context("timed out connecting")??;
+
+        let mut next_id = 0;
+        let mut call = |message: Value| {
+            next_id += 1;
+            let mut message = message;
+            message["id"] = json!(next_id);
+            (next_id, message)
+        };
+
+        expect_message(&mut socket, "auth_required").await?;
+        socket.send(Message::text(json!({"type": "auth", "access_token": self.token}).to_string())).await?;
+        let auth = expect_message(&mut socket, "auth_ok").await.context("access token rejected")?;
+        debug!("Home Assistant WebSocket: {}", auth);
+
+        let (id, request) = call(json!({"type": "homeassistant/expose_entity/list"}));
+        let listed = request_result(&mut socket, id, request).await?;
+        let exposed_ids: Vec<String> = listed["exposed_entities"]
+            .as_object()
+            .context("no exposed_entities in the reply")?
+            .iter()
+            .filter(|(_, settings)| settings["conversation"].as_bool() == Some(true))
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        let (id, request) = call(json!({"type": "config/entity_registry/get_entries", "entity_ids": exposed_ids}));
+        let entries = request_result(&mut socket, id, request).await?;
+        let _ = socket.close(None).await;
+
+        let mut exposed = Exposed::default();
+        for entity_id in exposed_ids {
+            let entry = &entries[&entity_id];
+            let aliases: Vec<String> = entry["aliases"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str()).map(str::to_string).collect())
+                .unwrap_or_default();
+            let name = entry["name"]
+                .as_str()
+                .or_else(|| entry["original_name"].as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| entity_id.split('.').nth(1).unwrap_or("").replace('_', " "));
+            exposed.names.insert(entity_id.clone(), name);
+            exposed.aliases.insert(entity_id, aliases);
+        }
+        Ok(exposed)
     }
 
     async fn states(&self) -> Result<Vec<EntityState>> {
@@ -333,8 +512,18 @@ impl HomeAssistant {
 
     /// Readings for the entities a question is about, for the LLM to phrase.
     pub async fn status(&self, query: &str) -> Result<String> {
-        let states = self.states().await?;
-        let matches = best_matches(query, &states);
+        let mut states = self.states().await?;
+        let no_aliases = HashMap::new();
+        let exposed = self.exposed().await;
+        let aliases = match &exposed {
+            Some(exposed) if !exposed.aliases.is_empty() => {
+                states.retain(|s| exposed.aliases.contains_key(&s.entity_id));
+                &exposed.aliases
+            }
+            // Nothing exposed (or the list couldn't be read): look at everything
+            _ => &no_aliases,
+        };
+        let matches = best_matches(query, &states, aliases);
         if matches.is_empty() {
             return Ok(format!("No Home Assistant entity matches '{}'.", query));
         }
@@ -343,6 +532,43 @@ impl HomeAssistant {
             .map(|s| format!("{}: {}", s.name(), s.describe()))
             .collect::<Vec<_>>()
             .join(". "))
+    }
+}
+
+type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Next JSON message from Home Assistant, giving up after a few seconds.
+async fn next_message(socket: &mut Socket) -> Result<Value> {
+    loop {
+        let message = tokio::time::timeout(Duration::from_secs(8), socket.next())
+            .await
+            .context("Home Assistant stopped answering")?
+            .context("Home Assistant closed the connection")??;
+        if let Message::Text(text) = message {
+            return Ok(serde_json::from_str(&text)?);
+        }
+    }
+}
+
+async fn expect_message(socket: &mut Socket, kind: &str) -> Result<Value> {
+    let message = next_message(socket).await?;
+    if message["type"] != kind {
+        bail!("expected {} from Home Assistant, got {}", kind, message["type"]);
+    }
+    Ok(message)
+}
+
+async fn request_result(socket: &mut Socket, id: u64, request: Value) -> Result<Value> {
+    socket.send(Message::text(request.to_string())).await?;
+    loop {
+        let message = next_message(socket).await?;
+        if message["id"] != id {
+            continue;
+        }
+        if message["success"] != true {
+            bail!("Home Assistant refused {}: {}", request["type"], message["error"]);
+        }
+        return Ok(message["result"].clone());
     }
 }
 
@@ -370,7 +596,7 @@ mod tests {
     }
 
     fn names(query: &str, states: &[EntityState]) -> Vec<String> {
-        best_matches(query, states).iter().map(|s| s.entity_id.clone()).collect()
+        best_matches(query, states, &HashMap::new()).iter().map(|s| s.entity_id.clone()).collect()
     }
 
     #[test]
@@ -392,6 +618,36 @@ mod tests {
         assert!(!names("humidity", &states).contains(&"sensor.humidite".to_string()));
         assert_eq!(names("salon temperature", &states), ["sensor.salon_temperature"]);
         assert!(names("what is the", &states).is_empty());
+    }
+
+    #[test]
+    fn aliases_name_entities() {
+        let states = sample();
+        let aliases = HashMap::from([
+            ("sensor.hp2553_dewpoint".to_string(), vec!["point de rosée".to_string()]),
+            ("sensor.outdoor_temp".to_string(), vec!["how cold".to_string()]),
+        ]);
+        let names = |q: &str| -> Vec<String> { best_matches(q, &states, &aliases).iter().map(|s| s.entity_id.clone()).collect() };
+        assert_eq!(names("point de rosée"), ["sensor.hp2553_dewpoint"]);
+        assert_eq!(names("how cold is it"), ["sensor.outdoor_temp"]);
+    }
+
+    #[test]
+    fn catalogue_lists_short_names_and_aliases() {
+        let exposed = Exposed {
+            aliases: HashMap::from([("sensor.a".into(), vec!["rain this week".into()]), ("sensor.b".into(), vec![])]),
+            names: HashMap::from([("sensor.a".into(), "Weekly Rain".into()), ("sensor.b".into(), "Dewpoint".into())]),
+        };
+        assert_eq!(exposed.catalogue(), "Dewpoint, Weekly Rain (rain this week)");
+    }
+
+    #[test]
+    fn timestamps_are_spoken_as_local_times() {
+        let now = chrono::Local::now();
+        assert_eq!(speak_time(&now.to_rfc3339()), format!("today at {}", now.format("%H:%M")));
+        assert_eq!(speak_time("not a time"), "not a time");
+        let lightning = entity("sensor.last_lightning", "2020-10-09T00:31:27+00:00", json!({"device_class": "timestamp"}));
+        assert!(lightning.describe().contains("October 2020 at"), "{}", lightning.describe());
     }
 
     #[test]
