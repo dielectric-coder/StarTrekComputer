@@ -5,6 +5,7 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tracing::{debug, info, error, warn};
 
 mod audio;
+mod home;
 mod llm;
 mod search;
 mod stt;

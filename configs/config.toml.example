@@ -55,3 +55,12 @@ learning_rate = 0.1               # How quickly preferences adapt (0.0-1.0)
 log_level = "info"                              # Logging level (error, warn, info, debug, trace)
 data_dir = "/var/lib/startrek-computer"         # Data directory for logs and cache
 cancel_window_secs = 3.0                        # Time to say "negative" after "You have requested: ..."
+
+[home_assistant]
+# Optional: answer questions about the house ("Computer, basement temperature?").
+# Addresses are tried in order; put the home network first and the Tailscale
+# address (100.x.y.z or MagicDNS name) second so it also works away from home.
+urls = ["http://homeassistant.local:8123", "http://100.64.0.10:8123"]
+# Long-lived access token from your Home Assistant profile > Security, in a file
+# readable only by you (chmod 600). HASS_TOKEN in the environment overrides it.
+# token_file = "/var/lib/startrek-computer/home_assistant_token"

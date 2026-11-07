@@ -12,6 +12,20 @@ pub struct AssistantConfig {
     pub wake_word: WakeWordConfig,
     pub rag: RagConfig,
     pub general: GeneralConfig,
+    /// Optional: answer questions about the house from Home Assistant
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_assistant: Option<HomeAssistantConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HomeAssistantConfig {
+    /// Addresses tried in order, e.g. the home network first, then the Tailscale
+    /// address for when the laptop is away. The one that answered last is tried first.
+    pub urls: Vec<String>,
+    /// File holding a long-lived access token (Home Assistant profile > Security).
+    /// Defaults to <data_dir>/home_assistant_token; the HASS_TOKEN variable overrides it.
+    #[serde(default)]
+    pub token_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,6 +239,7 @@ impl Default for AssistantConfig {
                 data_dir: home_dir.join("startrek/.voice-assistant"),
                 cancel_window_secs: default_cancel_window_secs(),
             },
+            home_assistant: None,
         }
     }
 }

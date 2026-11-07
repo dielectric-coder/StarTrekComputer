@@ -14,7 +14,7 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
-use crate::{config::AssistantConfig, AssistantCommand};
+use crate::{config::AssistantConfig, home::HomeAssistant, AssistantCommand};
 
 /// A captain's log recording ends by itself after this much silence.
 const LOG_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -79,6 +79,7 @@ struct Inner {
     scheduled: Mutex<Vec<Scheduled>>,
     next_id: AtomicU64,
     log: Mutex<Option<LogSession>>,
+    home: Option<HomeAssistant>,
 }
 
 pub struct ToolBox {
@@ -93,6 +94,10 @@ impl ToolBox {
             scheduled: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(1),
             log: Mutex::new(None),
+            home: HomeAssistant::from_config(config).unwrap_or_else(|e| {
+                warn!("Home Assistant disabled: {:#}", e);
+                None
+            }),
         });
 
         // Restore reminders; ones that came due while the assistant was off fire right away
@@ -108,7 +113,23 @@ impl ToolBox {
     }
 
     /// Tool definitions in Ollama's function-calling format.
-    pub fn definitions() -> Value {
+    pub fn definitions(&self) -> Value {
+        let mut tools = Self::base_definitions();
+        if self.inner.home.is_some() {
+            tools.as_array_mut().expect("tool list").push(json!(
+                {"type": "function", "function": {
+                    "name": "home_status",
+                    "description": "Read sensors and devices from the user's Home Assistant: temperatures, humidity, doors, windows, lights, power, weather. Call it for any question about the house or home readings, and answer only from what it returns.",
+                    "parameters": {"type": "object", "properties": {
+                        "query": {"type": "string", "description": "What to look up, in a few words naming the room or device and the quantity, e.g. 'basement temperature', 'garage door', 'outdoor humidity'"}
+                    }, "required": ["query"]}
+                }}
+            ));
+        }
+        tools
+    }
+
+    fn base_definitions() -> Value {
         json!([
             {"type": "function", "function": {
                 "name": "set_timer",
@@ -183,12 +204,19 @@ impl ToolBox {
             "set_volume" => set_volume(args).await,
             "start_captains_log" => self.start_captains_log().await,
             "read_captains_log" => read_captains_log(&self.inner.data_dir, args).await,
+            "home_status" => self.home_status(args).await,
             _ => Err(anyhow::anyhow!("unknown tool {}", name)),
         };
         result.unwrap_or_else(|e| {
             warn!("Tool {} failed: {:#}", name, e);
             ToolOutput::data(format!("Error: {:#}", e))
         })
+    }
+
+    async fn home_status(&self, args: &Value) -> Result<ToolOutput> {
+        let home = self.inner.home.as_ref().context("Home Assistant is not configured")?;
+        let query = str_arg(args, "query").context("query is required")?;
+        Ok(ToolOutput::data(home.status(&query).await?))
     }
 
     async fn set_timer(&self, args: &Value) -> Result<ToolOutput> {

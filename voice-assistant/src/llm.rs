@@ -152,6 +152,10 @@ impl LLMClient {
              system status or the captain's log. Only a tool call can set, cancel or change anything: \
              never say a timer, reminder, alarm, volume or log was set, cancelled or changed unless a \
              tool did it in this turn, even if earlier answers in the conversation say so. \
+             For questions about the house or the weather station (temperatures, humidity, dew point, \
+             pressure, doors, lights, sensors), call home_status when it is available, every time, even \
+             if the question was asked before: readings change, so never reuse or guess one. \
+             Name a reading by what it measures (outdoor temperature), not by the device's model name. \
              Your replies are spoken aloud: plain sentences only, no markdown, lists or symbols.",
         );
 
@@ -254,7 +258,7 @@ impl LLMClient {
         let request = ChatRequest {
             model: &self.config.llm.model,
             messages,
-            tools: ToolBox::definitions(),
+            tools: self.tools.definitions(),
             stream: false,
             keep_alive: MODEL_KEEP_ALIVE,
             think: self.config.llm.think,
