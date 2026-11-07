@@ -23,7 +23,7 @@ use search::{WebSearcher, SearchResults};
 use stt::SpeechToText;
 use tools::ToolBox;
 use tts::TextToSpeech;
-use wake_word::WakeWordDetector;
+use wake_word::{addressed_command, WakeWordDetector};
 
 #[derive(Debug, Clone)]
 pub enum AssistantCommand {
@@ -192,13 +192,13 @@ impl VoiceAssistant {
                 } else {
                     // Check for wake word
                     if let Some(transcription) = self.wake_word.lock().await.detect(&audio_data).await? {
-                        let rest = transcription.to_lowercase().replacen("computer", "", 1);
-                        if !rest.chars().any(|c| c.is_alphanumeric()) {
+                        let command = addressed_command(&transcription).unwrap_or_default();
+                        if command.is_empty() {
                             self.event_tx.send(AssistantEvent::WakeWordDetected)?;
                         } else {
                             // "Computer, <command>" spoken in one go
                             *self.is_listening.lock().await = true;
-                            self.event_tx.send(AssistantEvent::SpeechDetected(transcription))?;
+                            self.event_tx.send(AssistantEvent::SpeechDetected(command))?;
                         }
                     }
                 }
