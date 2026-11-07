@@ -24,7 +24,7 @@ const MAX_MATCHES: usize = 6;
 /// How long the list of exposed entities is trusted before it is fetched again.
 const EXPOSED_TTL: Duration = Duration::from_secs(300);
 /// Longest catalogue of entity names put into the LLM's tool description.
-const MAX_CATALOGUE_CHARS: usize = 1500;
+const MAX_CATALOGUE_CHARS: usize = 3000;
 
 /// Entity kinds that never hold a reading worth speaking.
 const IGNORED_DOMAINS: &[&str] = &[
@@ -319,27 +319,46 @@ pub struct Exposed {
 }
 
 impl Exposed {
-    fn catalogue(&self) -> String {
-        let mut entries: Vec<String> = self
-            .names
-            .iter()
-            .map(|(id, name)| match self.aliases.get(id).filter(|a| !a.is_empty()) {
-                Some(aliases) => format!("{} ({})", name, aliases.join(", ")),
-                None => name.clone(),
-            })
-            .collect();
-        entries.sort();
-        entries.dedup();
+    /// Exposed entities grouped by device, e.g. "Station Météo: Dewpoint (Point de rosée),
+    /// Wind Speed; Table de chevet Michel: Relais Sonoff B R2". `states` gives the full
+    /// names, whose start is the device name; short names alone are often ambiguous.
+    fn catalogue(&self, states: &[EntityState]) -> String {
+        let mut devices: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+        for state in states {
+            let Some(short) = self.names.get(&state.entity_id) else { continue };
+            if IGNORED_DOMAINS.contains(&state.domain()) {
+                continue;
+            }
+            let full = state.name();
+            let device = full
+                .strip_suffix(short.as_str())
+                .map(str::trim)
+                .filter(|d| !d.is_empty())
+                .unwrap_or("")
+                .to_string();
+            let entry = match self.aliases.get(&state.entity_id).filter(|a| !a.is_empty()) {
+                Some(aliases) => format!("{} ({})", short, aliases.join(", ")),
+                None => short.clone(),
+            };
+            devices.entry(device).or_default().push(entry);
+        }
+
         let mut catalogue = String::new();
-        for entry in entries {
-            if catalogue.len() + entry.len() > MAX_CATALOGUE_CHARS {
-                catalogue.push_str(", and more");
+        for (device, mut entries) in devices {
+            entries.sort();
+            let group = if device.is_empty() {
+                entries.join(", ")
+            } else {
+                format!("{}: {}", device, entries.join(", "))
+            };
+            if catalogue.len() + group.len() > MAX_CATALOGUE_CHARS {
+                catalogue.push_str("; and more");
                 break;
             }
             if !catalogue.is_empty() {
-                catalogue.push_str(", ");
+                catalogue.push_str("; ");
             }
-            catalogue.push_str(&entry);
+            catalogue.push_str(&group);
         }
         catalogue
     }
@@ -388,9 +407,17 @@ impl HomeAssistant {
 
     /// Find a reachable address and read the exposed entities ahead of the first question.
     pub async fn warm_up(&self) -> Result<()> {
-        self.states().await?;
-        self.exposed().await;
+        let states = self.states().await?;
+        if let Some(exposed) = self.exposed().await {
+            self.update_catalogue(&exposed, &states);
+        }
         Ok(())
+    }
+
+    fn update_catalogue(&self, exposed: &Exposed, states: &[EntityState]) {
+        if let Ok(mut catalogue) = self.catalogue.lock() {
+            *catalogue = exposed.catalogue(states);
+        }
     }
 
     /// Names of the exposed entities, empty until they have been fetched.
@@ -410,9 +437,6 @@ impl HomeAssistant {
         match self.fetch_exposed().await {
             Ok(exposed) => {
                 info!("Home Assistant: {} entities exposed to voice assistants", exposed.names.len());
-                if let Ok(mut catalogue) = self.catalogue.lock() {
-                    *catalogue = exposed.catalogue();
-                }
                 let exposed = Arc::new(exposed);
                 *cached = Some((Instant::now(), exposed.clone()));
                 Some(exposed)
@@ -515,6 +539,9 @@ impl HomeAssistant {
         let mut states = self.states().await?;
         let no_aliases = HashMap::new();
         let exposed = self.exposed().await;
+        if let Some(exposed) = &exposed {
+            self.update_catalogue(exposed, &states);
+        }
         let aliases = match &exposed {
             Some(exposed) if !exposed.aliases.is_empty() => {
                 states.retain(|s| exposed.aliases.contains_key(&s.entity_id));
@@ -633,12 +660,32 @@ mod tests {
     }
 
     #[test]
-    fn catalogue_lists_short_names_and_aliases() {
+    fn catalogue_groups_entities_by_device() {
         let exposed = Exposed {
-            aliases: HashMap::from([("sensor.a".into(), vec!["rain this week".into()]), ("sensor.b".into(), vec![])]),
-            names: HashMap::from([("sensor.a".into(), "Weekly Rain".into()), ("sensor.b".into(), "Dewpoint".into())]),
+            aliases: HashMap::from([
+                ("sensor.a".into(), vec!["pluie semaine".into()]),
+                ("sensor.b".into(), vec![]),
+                ("switch.c".into(), vec![]),
+                ("switch.d".into(), vec![]),
+            ]),
+            names: HashMap::from([
+                ("sensor.a".into(), "Weekly Rain".into()),
+                ("sensor.b".into(), "Dewpoint".into()),
+                ("switch.c".into(), "Relais".into()),
+                ("switch.d".into(), "Relais".into()),
+            ]),
         };
-        assert_eq!(exposed.catalogue(), "Dewpoint, Weekly Rain (rain this week)");
+        let states = [
+            entity("sensor.a", "2", json!({"friendly_name": "Station Weekly Rain"})),
+            entity("sensor.b", "5", json!({"friendly_name": "Station Dewpoint"})),
+            entity("switch.c", "on", json!({"friendly_name": "Chevet Michel Relais"})),
+            entity("switch.d", "off", json!({"friendly_name": "Relais"})),
+            entity("sensor.hidden", "1", json!({"friendly_name": "Not exposed"})),
+        ];
+        assert_eq!(
+            exposed.catalogue(&states),
+            "Relais; Chevet Michel: Relais; Station: Dewpoint, Weekly Rain (pluie semaine)"
+        );
     }
 
     #[test]
